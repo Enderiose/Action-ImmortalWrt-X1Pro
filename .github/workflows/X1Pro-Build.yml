@@ -21,6 +21,7 @@ on:
           - 'openclash'
           - 'passwall'
           - 'homeproxy'
+          - 'vpn'
       notes:
         description: '编译备注（发布到 Release 页面）'
         required: false
@@ -250,6 +251,8 @@ jobs:
           # 选择配置（一个 .config 编译两个设备）
           if [ "$PROXY" = "none" ]; then
             CONFIG_FILE="config/x1pro.config"
+          elif [ "$PROXY" = "vpn" ]; then
+            CONFIG_FILE="config/x1pro_vpn.config"
           else
             CONFIG_FILE="config/x1pro-${PROXY}.config"
           fi
