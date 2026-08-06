@@ -252,7 +252,7 @@ jobs:
           if [ "$PROXY" = "none" ]; then
             CONFIG_FILE="config/x1pro.config"
           elif [ "$PROXY" = "vpn" ]; then
-            CONFIG_FILE="config/x1pro_vpn.config"
+            CONFIG_FILE="config/x1pro-vpn.config"
           else
             CONFIG_FILE="config/x1pro-${PROXY}.config"
           fi
