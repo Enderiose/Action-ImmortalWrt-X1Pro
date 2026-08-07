@@ -1,0 +1,25 @@
+#!/bin/sh
+# X1Pro L2TP 默认路由修复 - hotplug 脚本
+# 安装: 放到 /etc/hotplug.d/iface/99-fix-l2tp-route
+# 作用: L2TP 接口 UP 后 10 秒, 确保默认路由留在 WAN
+
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "111" ] || exit 0
+
+sleep 10
+
+# 删掉 L2TP 抢走的默认路由
+ip route del default dev l2tp-111 2>/dev/null
+
+# 确保默认路由在 WAN
+if ! ip route show default | grep -q "dev eth0"; then
+  GW=$(ip route show default 2>/dev/null | sed -n 's/.*via \([^ ]*\) dev.*/\1/p' | head -1)
+  [ -z "$GW" ] && GW=$(ifstatus wan 2>/dev/null | sed -n 's/.*"gateway": "\([^"]*\)".*/\1/p' | head -1)
+  [ -z "$GW" ] && GW="192.168.3.1"
+  ip route del default 2>/dev/null
+  ip route add default via "$GW" dev eth0 2>/dev/null
+  logger -t l2tp-fix "默认路由已修正: via $GW dev eth0"
+fi
+
+# 确保远端静态路由存在
+ip route replace 10.0.0.0/24 dev l2tp-111 2>/dev/null
