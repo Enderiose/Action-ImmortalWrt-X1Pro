@@ -208,7 +208,7 @@ echo "[1] 默认路由"
 ip route show default 2>/dev/null | grep -v "dev $NET_DEV" | grep -q "default"
 check $? "默认路由在 WAN: $(ip route show default)"
 if ! ip route show default 2>/dev/null | grep -v "dev $NET_DEV" | grep -q "default"; then
-    fix_default_route || die "默认路由修复失败"
+    if fix_default_route; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else die "默认路由修复失败"; fi
 fi
 
 # [2] 远端网段路由
@@ -216,7 +216,7 @@ echo "[2] 远端网段 $DST_SUBNET 路由"
 ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV"
 check $? "VPN 路由: $(ip route show "$DST_SUBNET" 2>/dev/null)"
 if ! ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV"; then
-    fix_subnet_route || die "子网路由修复失败"
+    if fix_subnet_route; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else die "子网路由修复失败"; fi
 fi
 
 # [3] IPsec ESTABLISHED
@@ -224,7 +224,7 @@ echo "[3] IPsec 隧道"
 ipsec status 2>/dev/null | grep -q ESTABLISHED
 check $? "IPsec: $(ipsec status 2>/dev/null | grep ESTABLISHED | head -1 | sed 's/^[[:space:]]*//')"
 if ! ipsec status 2>/dev/null | grep -q ESTABLISHED; then
-    fix_ipsec || echo "  [WARN] IPsec 修复失败"
+    if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] IPsec 修复失败"; fi
 fi
 
 # [4] ESP 加密
@@ -233,7 +233,7 @@ ESP=$(ip xfrm state 2>/dev/null | grep -c "proto esp")
 [ "$ESP" -ge 1 ]
 check $? "ESP SA 数: $ESP"
 if [ "$ESP" -lt 1 ]; then
-    fix_ipsec || echo "  [WARN] ESP 修复失败"
+    if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] ESP 修复失败"; fi
 fi
 
 # [5] L2TP UP
@@ -242,7 +242,7 @@ IP=$(ifstatus "$IFNAME" 2>/dev/null | sed -n 's/.*"address": "\([^"]*\)".*/\1/p'
 ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'
 check $? "L2TP UP, IP: ${IP:-无}"
 if ! ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'; then
-    fix_l2tp_up || die "L2TP 接口修复失败"
+    if fix_l2tp_up; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else die "L2TP 接口修复失败"; fi
 fi
 
 # [6] ping 远端
@@ -250,7 +250,7 @@ echo "[6] ping $DST_TARGET"
 ping -c 3 -W 2 "$DST_TARGET" >/dev/null 2>&1
 check $? "ping $DST_TARGET"
 if ! ping -c 3 -W 2 "$DST_TARGET" >/dev/null 2>&1; then
-    fix_ping_target || echo "  [info] ping 不通 (可能对端禁 ICMP)"
+    if fix_ping_target; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [info] ping 不通 (可能对端禁 ICMP)"; fi
 fi
 
 # [7] curl 远端
@@ -260,7 +260,7 @@ CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$DST_TARGET/" 2>/dev/
 [ -n "$CODE" ] && [ "$CODE" != "000" ]
 check $? "HTTP ${CODE:-000}"
 if [ "${CODE:-000}" = "000" ]; then
-    fix_curl_target || echo "  [WARN] curl 修复失败"
+    if fix_curl_target; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] curl 修复失败"; fi
 fi
 
 # [8] 外网
@@ -268,7 +268,7 @@ echo "[8] 外网"
 ping -c 2 -W 2 223.5.5.5 >/dev/null 2>&1
 check $? "外网 223.5.5.5"
 if ! ping -c 2 -W 2 223.5.5.5 >/dev/null 2>&1; then
-    fix_internet || echo "  [WARN] 外网修复失败"
+    if fix_internet; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] 外网修复失败"; fi
 fi
 
 echo "=============================================="
