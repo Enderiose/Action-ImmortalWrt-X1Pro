@@ -8,15 +8,11 @@
 #        IKE_RIGHTID L2TP_USER L2TP_PASS PSK MTU
 #
 # 本脚本一次性完成:
-#   1. 安装 strongswan (若固件未含)
-#   2. 禁用 kernel-libipsec (Transport 模式必需)
-#   3. 建/改 L2TP 接口 (defaultroute=0, 不抢默认路由)
-#   4. 写 IPsec PSK + 连接 (IKEv1 / transport)
-#   5. 启动 IPsec (重试+诊断)
-#   6. 拉起 L2TP (重试)
-#   7. 配静态路由 (仅远端网段走 VPN)
-#   8. 配防火墙 VPN zone + lan<->VPN 转发
-#   9. 验证加密 SA 与连通性
+#   1. 安装 strongswan      6. 防火墙 (WAN 放行 IPsec + VPN zone)
+#   2. 禁用 kernel-libipsec  7. 启动 IPsec
+#   3. 写 IPsec 配置        8. 拉起 L2TP
+#   4. 清理旧 VPN 配置      9. 静态路由
+#   5. L2TP 接口配置       10. 验证
 #
 # 幂等: 第二次运行会找到已有接口/配置并修改测试, 不会重复新建。
 # ============================================================
@@ -201,7 +197,45 @@ uci set network.$IFNAME.defaultroute='0'
 uci commit network
 log "[ok] 已写 network.$IFNAME (defaultroute=0, 不抢默认路由)"
 
-# ---------- 6. 启动 IPsec (重试 + 诊断) ----------
+# ---------- 6. 防火墙 (必须先配, 否则 IPsec 的 UDP 500/4500 被拦) -----
+echo "[6] 配置防火墙 ..."
+# WAN zone: 放行 IPsec IKE/NAT-T (UDP 500, 4500) + L2TP (UDP 1701) 入站
+uci set firewall.wan_ipsec=rule
+uci set firewall.wan_ipsec.name='Allow-IPsec'
+uci set firewall.wan_ipsec.src='wan'
+uci set firewall.wan_ipsec.proto='udp'
+uci set firewall.wan_ipsec.dest_port='500 4500'
+uci set firewall.wan_ipsec.target='ACCEPT'
+
+# WAN zone: 允许 ESP 协议 (IP protocol 50) — 内核已处理，加规则保底
+uci set firewall.wan_esp=rule
+uci set firewall.wan_esp.name='Allow-ESP'
+uci set firewall.wan_esp.src='wan'
+uci set firewall.wan_esp.proto='esp'
+uci set firewall.wan_esp.target='ACCEPT'
+
+# VPN zone: 虚拟接口、全放行 + masq (出隧道做 SNAT)
+uci set firewall.VPN=zone
+uci set firewall.VPN.name='VPN'
+uci set firewall.VPN.network="$IFNAME"
+uci set firewall.VPN.input='ACCEPT'
+uci set firewall.VPN.output='ACCEPT'
+uci set firewall.VPN.forward='ACCEPT'
+uci set firewall.VPN.masq='1'
+
+# lan ↔ VPN 转发
+uci set firewall.lan_to_vpn=forwarding
+uci set firewall.lan_to_vpn.src='lan'
+uci set firewall.lan_to_vpn.dest='VPN'
+uci set firewall.vpn_to_lan=forwarding
+uci set firewall.vpn_to_lan.src='VPN'
+uci set firewall.vpn_to_lan.dest='lan'
+
+uci commit firewall
+/etc/init.d/firewall restart >/dev/null 2>&1
+log "[ok] 防火墙: WAN UDP 500/4500 + ESP + VPN zone + lan↔VPN 转发"
+
+# ---------- 7. 启动 IPsec (重试 + 诊断) ----------
 wait_established(){
   local t=0
   while [ $t -lt 30 ]; do
@@ -216,9 +250,10 @@ bring_ipsec(){
 }
 IPSEC_OK=0
 for ATT in 1 2 3; do
-  echo "[6] 启动 IPsec (尝试 $ATT/3) ..."
+  echo "[7] 启动 IPsec (尝试 $ATT/3) ..."
   /etc/init.d/ipsec stop >/dev/null 2>&1
   ip xfrm state flush >/dev/null 2>&1
+  # 确保默认路由在 WAN
   fix_default_route
   # 前置: kernel-libipsec 必须禁用
   if grep -qs "load = yes" /etc/strongswan.d/charon/kernel-libipsec.conf 2>/dev/null; then
@@ -231,7 +266,7 @@ for ATT in 1 2 3; do
 done
 [ $IPSEC_OK -eq 1 ] || { echo "[ERROR] IPsec 多次重试仍失败, 请检查 WAN/服务端/PSK/rightid"; exit 1; }
 
-# ---------- 7. 拉起 L2TP (重试) ----------
+# ---------- 8. 拉起 L2TP (重试) ----------
 L2TP_OK=0
 for ATT in 1 2 3; do
   echo "[7] 拉起 L2TP (尝试 $ATT/3) ..."
@@ -247,7 +282,7 @@ done
 [ $L2TP_OK -eq 1 ] || { echo "[ERROR] L2TP 无法 UP"; exit 1; }
 log "[ok] L2TP UP"
 
-# ---------- 8. 静态路由 (幂等 + 即时) ----------
+# ---------- 9. 静态路由 (幂等 + 即时) ----------
 uci set network.vpn_route=route
 uci set network.vpn_route.interface="$IFNAME"
 uci set network.vpn_route.target="$NET_TARGET"
@@ -258,24 +293,6 @@ log "[ok] 静态路由 $DST_SUBNET dev $NET_DEV"
 
 # 兜底: 防止 L2TP 抢默认路由 (defaultroute=0 在本固件未必可靠)
 fix_default_route
-
-# ---------- 9. 防火墙 (幂等, 命名 section) ----------
-uci set firewall.VPN=zone
-uci set firewall.VPN.name='VPN'
-uci set firewall.VPN.network="$IFNAME"
-uci set firewall.VPN.input='ACCEPT'
-uci set firewall.VPN.output='ACCEPT'
-uci set firewall.VPN.forward='ACCEPT'
-uci set firewall.VPN.masq='1'
-uci set firewall.lan_to_vpn=forwarding
-uci set firewall.lan_to_vpn.src='lan'
-uci set firewall.lan_to_vpn.dest='VPN'
-uci set firewall.vpn_to_lan=forwarding
-uci set firewall.vpn_to_lan.src='VPN'
-uci set firewall.vpn_to_lan.dest='lan'
-uci commit firewall
-/etc/init.d/firewall restart >/dev/null 2>&1
-log "[ok] 防火墙 VPN zone + lan<->VPN 转发"
 
 # ---------- 10. 验证 ----------
 echo "=============================================="
