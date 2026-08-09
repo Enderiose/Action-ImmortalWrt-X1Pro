@@ -2,10 +2,32 @@
 # ============================================================
 # X1Pro L2TP/IPsec 状态检测脚本
 # 用法:  sh /tmp/vpn-check.sh [接口名] [远端目标IP] [远端网段]
+#       不传接口名则自动检测第一个 L2TP 接口
 # 示例:  sh /tmp/vpn-check.sh 111 10.0.0.253 10.0.0.0/24
+#        sh /tmp/vpn-check.sh               # 自动检测
 # ============================================================
 
-IFNAME="${1:-111}"
+# --- 自动检测 L2TP 接口 ---
+auto_detect_ifname() {
+    # 从 /etc/config/network 中找 l2tp 类型的接口名
+    # 排除注释行，找 option proto 'l2tp' 的上一个 config interface 'xxx' 行
+    uci show network 2>/dev/null \
+        | sed -n "/network\./s/^network\.\([^.]*\)[.]proto='l2tp'$/\1/p" \
+        | head -1
+}
+
+if [ -n "$1" ]; then
+    IFNAME="$1"
+else
+    IFNAME=$(auto_detect_ifname)
+    if [ -z "$IFNAME" ]; then
+        echo "错误: 未找到 L2TP 接口, 请手动指定接口名"
+        echo "用法: $0 <接口名> [远端IP] [远端网段]"
+        exit 1
+    fi
+    echo "自动检测到 L2TP 接口: $IFNAME"
+fi
+
 DST_TARGET="${2:-10.0.0.253}"
 DST_SUBNET="${3:-10.0.0.0/24}"
 NET_DEV="l2tp-$IFNAME"
@@ -19,9 +41,9 @@ echo " L2TP/IPsec VPN 状态检测"
 echo "  if=$IFNAME  dev=$NET_DEV  target=$DST_TARGET"
 echo "=============================================="
 
-# --- 1. 默认路由必须在 WAN (eth0) ---
+# --- 1. 默认路由必须在 WAN ---
 echo "[1] 默认路由"
-ip route show default 2>/dev/null | grep -q "dev eth0"
+ip route show default 2>/dev/null | grep -v "dev $NET_DEV" | grep -q "default"
 check "默认路由在 WAN: $(ip route show default)"
 
 # --- 2. 静态路由: 远端网段走 L2TP ---
