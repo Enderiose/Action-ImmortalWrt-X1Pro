@@ -83,27 +83,38 @@ NET_MASK="$(cidr2mask "$NET_PREFIX")"
 
 log(){ echo "  $*"; }
 NET_DEV="l2tp-$IFNAME"
+WAN_DEV="eth0"
 
-# 动态获取当前默认路由的网关
-# 优先级: ip route查via > ifstatus wan > 硬编码兜底
-get_wan_gateway(){
+# ── 探测 WAN 网关（仅作建议值，最终由用户确认）──
+_suggest_gateway(){
   local gw
-  gw=$(ip route show default 2>/dev/null | sed -n 's/.*via \([^ ]*\) dev.*/\1/p' | head -1)
+  gw=$(ip route show default dev "$WAN_DEV" 2>/dev/null | sed -n 's/.*via \([^ ]*\).*/\1/p' | head -1)
+  [ -z "$gw" ] && gw=$(ip route show default 2>/dev/null | grep 'via ' | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*via \([^ ]*\).*/\1/p' | head -1)
   [ -z "$gw" ] && gw=$(ifstatus wan 2>/dev/null | sed -n 's/.*"gateway": "\([^"]*\)".*/\1/p' | head -1)
-  [ -z "$gw" ] && gw="192.168.3.1"
+  [ -z "$gw" ] && gw=$(awk '/^gateway/{print $2; exit}' /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null)
   echo "$gw"
 }
+
+SUGGESTED_GW=$(_suggest_gateway)
+
+# WAN_GW: 优先环境变量/conf，其次交互输入，再次探测值
+if [ -z "$WAN_GW" ]; then
+  read -p "WAN 网关 (建议: $SUGGESTED_GW): " v
+  [ -n "$v" ] && WAN_GW=$v
+  [ -z "$WAN_GW" ] && WAN_GW="$SUGGESTED_GW"
+fi
+[ -z "$WAN_GW" ] && { echo "[ERROR] WAN 网关不能为空"; exit 1; }
+log "WAN 网关: $WAN_GW (dev $WAN_DEV)"
 
 # 确保默认路由在 WAN(eth0), 并删除任何走 L2TP 的默认路由 (防抢默认路由)
 fix_default_route(){
   # 先把 L2TP 抢走的默认路由删掉
   ip route del default dev "$NET_DEV" 2>/dev/null
-  # 再确保默认路由在 WAN
-  if ! ip route show default 2>/dev/null | grep -q "dev eth0"; then
-    GW=$(get_wan_gateway)
-    log "[!] 默认路由不在 WAN, 修正为 via $GW dev eth0"
+  # 再确保默认路由在 WAN（用预探测的网关）
+  if ! ip route show default 2>/dev/null | grep -q "dev $WAN_DEV"; then
+    log "[!] 默认路由不在 WAN, 修正为 via $WAN_GW dev $WAN_DEV"
     ip route del default 2>/dev/null
-    ip route add default via "$GW" dev eth0 2>/dev/null
+    ip route add default via "$WAN_GW" dev "$WAN_DEV" 2>/dev/null
   fi
 }
 
