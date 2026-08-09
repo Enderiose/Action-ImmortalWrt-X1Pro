@@ -79,7 +79,8 @@ NET_MASK="$(cidr2mask "$NET_PREFIX")"
 
 log(){ echo "  $*"; }
 NET_DEV="l2tp-$IFNAME"
-WAN_DEV="eth0"
+WAN_DEV="${WAN_DEV:-$(ip route show default 2>/dev/null | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)}"
+[ -z "$WAN_DEV" ] && { echo "[ERROR] 无法检测 WAN 设备"; exit 1; }
 
 # ── 探测 WAN 网关（仅作建议值，最终由用户确认）──
 _suggest_gateway(){
