@@ -48,10 +48,24 @@ fi
 
 NET_DEV="l2tp-$IFNAME"
 
-# 检测 WAN
-WAN_DEV="$(ip route show default 2>/dev/null | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
-WAN_GW="$(ip route show default dev "$WAN_DEV" 2>/dev/null | sed -n 's/.*via \([^ ]*\).*/\1/p' | head -1)"
-[ -z "$WAN_GW" ] && WAN_GW="$(ip route show default 2>/dev/null | grep 'via ' | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*via \([^ ]*\).*/\1/p' | head -1)"
+# 检测 WAN (多级回退)
+detect_wan() {
+    # 方法1: 从默认路由
+    WAN_DEV="$(ip route show default 2>/dev/null | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
+    WAN_GW="$(ip route show default 2>/dev/null | grep 'via ' | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*via \([^ ]*\).*/\1/p' | head -1)"
+    # 方法2: 从其他路由找 via + 设备
+    if [ -z "$WAN_DEV" ]; then
+        WAN_DEV="$(ip route 2>/dev/null | grep 'via ' | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
+        [ -z "$WAN_DEV" ] && WAN_DEV="$(ip route 2>/dev/null | grep 'proto static' | grep -v 'dev ppp\|dev l2tp\|dev br-lan' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
+        [ -z "$WAN_DEV" ] && WAN_DEV="$(ip addr 2>/dev/null | grep -E '^[0-9]+: (eth|wan|usb|enp)' | sed 's/.*: \([^:@]*\).*/\1/' | head -1)"
+    fi
+    if [ -z "$WAN_GW" ]; then
+        WAN_GW="$(ip route 2>/dev/null | grep "dev $WAN_DEV" | grep 'via ' | sed -n 's/.*via \([^ ]*\).*/\1/p' | head -1)"
+        [ -z "$WAN_GW" ] && WAN_GW="$(ifstatus wan 2>/dev/null | sed -n 's/.*"gateway": "\([^"]*\).*/\1/p' | head -1)"
+        [ -z "$WAN_GW" ] && WAN_GW="$(uci -q get network.wan.gateway 2>/dev/null)"
+    fi
+}
+detect_wan
 
 PASS=0
 FAIL=0
