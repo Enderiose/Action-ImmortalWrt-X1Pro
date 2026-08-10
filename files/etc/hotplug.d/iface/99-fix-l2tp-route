@@ -38,6 +38,9 @@ for RT in $(uci -q show network | grep "=route" | cut -d= -f1); do
     bits=0; for(i=1;i<=4;i++){ n=$i; while(n>0){bits+=n%2; n=int(n/2)} }
     print bits
   }' 2>/dev/null)
+  # 防御: netmask=0.0.0.0 会算出 prefix=0, 等同于默认路由, 拒绝写入
+  [ "$PREFIX" = "0" ] && continue
+  [ "$PREFIX" = "0/0" ] && continue
   ip route replace "$TARGET/$PREFIX" dev "$L2TP_DEV" 2>/dev/null
   logger -t l2tp-fix "VPN 路由已补: $TARGET/$PREFIX dev $L2TP_DEV"
 done
