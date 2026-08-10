@@ -30,46 +30,37 @@
 set -e
 
 # --- 配置加载 ---
+# 必须通过 /tmp/bypass-l2tp.conf 传入, 不存在则打印模板退出
 if [ -f /tmp/bypass-l2tp.conf ]; then
   . /tmp/bypass-l2tp.conf
   echo ">>> 从 /tmp/bypass-l2tp.conf 加载配置"
+else
+  cat << 'TEMPLATE'
+>>> /tmp/bypass-l2tp.conf 不存在, 请先创建:
+
+cat > /tmp/bypass-l2tp.conf << 'CONF'
+IFNAME=001
+IPSEC_SERVER=对方IP或域名
+DST_SUBNET=192.168.2.0/24
+DST_TARGET=192.168.2.1
+IKE_RIGHTID=192.168.2.1
+L2TP_USER=L2TP-1
+L2TP_PASS=你的密码
+PSK=预共享密钥
+CONF
+TEMPLATE
+  exit 1
 fi
 
-# --- 交互输入 ---
-ask() {
-  local var="$1" prompt="$2" default="$3"
-  local val
-  eval "val=\${$var:-}"
-  [ -n "$val" ] && return
-  if [ -n "$default" ]; then
-    printf "%s [%s]: " "$prompt" "$default"
-  else
-    printf "%s: " "$prompt"
-  fi
-  read -r val </dev/tty
-  [ -z "$val" ] && val="$default"
-  eval "$var=\"$val\""
-}
-
-ask_psw() {
-  local var="$1" prompt="$2"
-  eval "[ -n \"\${$var:-}\" ]" && return
-  printf "%s: " "$prompt"
-  stty -echo </dev/tty 2>/dev/null
-  read -r val </dev/tty
-  stty echo </dev/tty 2>/dev/null
-  echo
-  eval "$var=\"$val\""
-}
-
-ask IFNAME    "L2TP 接口名"           "001"
-ask IPSEC_SERVER "IPsec 服务端地址"
-ask DST_SUBNET   "远端目标网段 (如 10.0.0.0/24)"
-ask DST_TARGET   "远端测试IP (如 10.0.0.253)"
-ask IKE_RIGHTID  "对端IKE标识 (ikuai填远端内网IP)"
-ask L2TP_USER    "L2TP 用户名"
-ask_psw L2TP_PASS "L2TP 密码"
-ask_psw PSK       "IPsec 预共享密钥"
+# 必填校验
+[ -z "$IFNAME" ]      && { echo "[FAIL] IFNAME 未设置";      exit 1; }
+[ -z "$IPSEC_SERVER" ] && { echo "[FAIL] IPSEC_SERVER 未设置"; exit 1; }
+[ -z "$DST_SUBNET" ]   && { echo "[FAIL] DST_SUBNET 未设置";   exit 1; }
+[ -z "$DST_TARGET" ]   && { echo "[FAIL] DST_TARGET 未设置";   exit 1; }
+[ -z "$IKE_RIGHTID" ]  && { echo "[FAIL] IKE_RIGHTID 未设置";  exit 1; }
+[ -z "$L2TP_USER" ]    && { echo "[FAIL] L2TP_USER 未设置";    exit 1; }
+[ -z "$L2TP_PASS" ]    && { echo "[FAIL] L2TP_PASS 未设置";    exit 1; }
+[ -z "$PSK" ]          && { echo "[FAIL] PSK 未设置";          exit 1; }
 
 # 自动检测主路由信息
 auto_detect_main() {
