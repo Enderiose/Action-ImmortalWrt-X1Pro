@@ -17,14 +17,28 @@ sleep 10
 # 删掉 L2TP 抢走的默认路由
 ip route del default dev "$L2TP_DEV" 2>/dev/null
 
+# 自动检测外网出口: eth0(WAN直连) 优先, 其次 br-lan(旁路经主路由)
+if ip link show eth0 >/dev/null 2>&1 && ip addr show eth0 | grep -q "inet "; then
+  WAN_DEV="eth0"
+else
+  WAN_DEV="br-lan"
+fi
+
 # 确保默认路由在 WAN
-if ! ip route show default | grep -q "dev eth0"; then
+if ! ip route show default | grep -q "dev $WAN_DEV"; then
   GW=$(ip route show default 2>/dev/null | sed -n 's/.*via \([^ ]*\) dev.*/\1/p' | head -1)
-  [ -z "$GW" ] && GW=$(ifstatus wan 2>/dev/null | sed -n 's/.*"gateway": "\([^"]*\)".*/\1/p' | head -1)
-  [ -z "$GW" ] && GW="192.168.3.1"
+  if [ -z "$GW" ]; then
+    # fallback: 从 uci 读取网关配置
+    GW=$(uci -q get network.lan.gateway 2>/dev/null)
+    [ -z "$GW" ] && GW=$(uci -q get network.wan.gateway 2>/dev/null)
+  fi
+  # 最终兜底
+  [ -z "$GW" ] && GW="192.168.1.1"
+
   ip route del default 2>/dev/null
-  ip route add default via "$GW" dev eth0 2>/dev/null
-  logger -t l2tp-fix "默认路由已修正: via $GW dev eth0"
+  ip route add default via "$GW" dev "$WAN_DEV" 2>/dev/null && \
+    logger -t l2tp-fix "默认路由已修正: via $GW dev $WAN_DEV" || \
+    logger -t l2tp-fix "默认路由修正失败: via $GW dev $WAN_DEV"
 fi
 
 # 确保远端静态路由存在 (从 uci route section 读取)
