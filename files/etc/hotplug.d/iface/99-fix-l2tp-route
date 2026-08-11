@@ -1,60 +1,19 @@
 #!/bin/sh
-# X1Pro L2TP 默认路由修复 - hotplug 脚本
-# 安装: 放到 /etc/hotplug.d/iface/99-fix-l2tp-route
-# 作用: 任意 L2TP 接口 UP 后 10 秒, 确保默认路由留在 WAN
+# X1Pro VPN 自动检测+修复 — hotplug 脚本
+# 任意网络接口变化(UP)后 15s, 调用 /root/vpn-check.sh 检测并修复
+# 合并到固件: files/etc/hotplug.d/iface/99-fix-l2tp-route
 
 [ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "loopback" ] && exit 0
 
-# 检测当前接口是否是 L2TP
-PROTO=$(uci -q get network."$INTERFACE".proto 2>/dev/null)
-[ "$PROTO" = "l2tp" ] || exit 0
+CHECK_SCRIPT="/root/vpn-check.sh"
 
-L2TP_DEV="l2tp-$INTERFACE"
+# 只在有 L2TP 接口且 vpn-check.sh 存在时执行
+[ -x "$CHECK_SCRIPT" ] || exit 0
+uci show network 2>/dev/null | grep -q "proto='l2tp'" || exit 0
 
-# 等 L2TP 完全稳定
-sleep 10
-
-# 删掉 L2TP 抢走的默认路由
-ip route del default dev "$L2TP_DEV" 2>/dev/null
-
-# 自动检测外网出口: eth0(WAN直连) 优先, 其次 br-lan(旁路经主路由)
-if ip link show eth0 >/dev/null 2>&1 && ip addr show eth0 | grep -q "inet "; then
-  WAN_DEV="eth0"
-else
-  WAN_DEV="br-lan"
-fi
-
-# 确保默认路由在 WAN
-if ! ip route show default | grep -q "dev $WAN_DEV"; then
-  GW=$(ip route show default 2>/dev/null | sed -n 's/.*via \([^ ]*\) dev.*/\1/p' | head -1)
-  if [ -z "$GW" ]; then
-    # fallback: 从 uci 读取网关配置
-    GW=$(uci -q get network.lan.gateway 2>/dev/null)
-    [ -z "$GW" ] && GW=$(uci -q get network.wan.gateway 2>/dev/null)
-  fi
-  # 最终兜底
-  [ -z "$GW" ] && GW="192.168.1.1"
-
-  ip route del default 2>/dev/null
-  ip route add default via "$GW" dev "$WAN_DEV" 2>/dev/null && \
-    logger -t l2tp-fix "默认路由已修正: via $GW dev $WAN_DEV" || \
-    logger -t l2tp-fix "默认路由修正失败: via $GW dev $WAN_DEV"
-fi
-
-# 确保远端静态路由存在 (从 uci route section 读取)
-for RT in $(uci -q show network | grep "=route" | cut -d= -f1); do
-  RT_IF=$(uci -q get "$RT".interface 2>/dev/null)
-  [ "$RT_IF" = "$INTERFACE" ] || continue
-  TARGET=$(uci -q get "$RT".target 2>/dev/null)
-  NETMASK=$(uci -q get "$RT".netmask 2>/dev/null)
-  [ -z "$TARGET" ] && continue
-  PREFIX=$(echo "$NETMASK" | awk -F. '{
-    bits=0; for(i=1;i<=4;i++){ n=$i; while(n>0){bits+=n%2; n=int(n/2)} }
-    print bits
-  }' 2>/dev/null)
-  # 防御: netmask=0.0.0.0 会算出 prefix=0, 等同于默认路由, 拒绝写入
-  [ "$PREFIX" = "0" ] && continue
-  [ "$PREFIX" = "0/0" ] && continue
-  ip route replace "$TARGET/$PREFIX" dev "$L2TP_DEV" 2>/dev/null
-  logger -t l2tp-fix "VPN 路由已补: $TARGET/$PREFIX dev $L2TP_DEV"
-done
+# 后台延迟执行, 等网络完全稳定
+(
+  sleep 15
+  sh "$CHECK_SCRIPT" 2>&1 | logger -t vpn-auto-fix
+) &
