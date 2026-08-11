@@ -1,22 +1,34 @@
 #!/bin/sh
-# X1Pro VPN auto-check + auto-fix — hotplug script
-# Triggered on ANY network interface UP event; runs /root/vpn-check.sh 15s later
-# Built into firmware via: files/etc/hotplug.d/iface/99-fix-l2tp-route
+# X1Pro VPN 自动检测+修复 — hotplug 脚本
+# 任意网络接口状态变化(ifup/ifdown/ifchange)后延迟 15s, 调用 /root/vpn-check.sh 检测并修复
+# 合并到固件: files/etc/hotplug.d/iface/99-fix-l2tp-route
 
-# Only act on "ifup" events (ignore ifdown / ifchange)
-[ "$ACTION" = "ifup" ] || exit 0
-
-# Skip loopback interface
+# 跳过 loopback 接口 (无需处理)
 [ "$INTERFACE" = "loopback" ] && exit 0
 
 CHECK_SCRIPT="/root/vpn-check.sh"
 
-# Only proceed if vpn-check.sh exists AND an L2TP interface is configured
+# 前置条件: vpn-check.sh 必须存在, 且网络配置中必须定义了 L2TP 接口
 [ -f "$CHECK_SCRIPT" ] || exit 0
 uci show network 2>/dev/null | grep -q "proto='l2tp'" || exit 0
 
-# Run in background with a delay so the network is fully stable before checking
+# 锁文件: 防止短时间内多次接口变化导致检测脚本并发执行
+LOCK="/var/lock/vpn-auto-fix.lock"
+if [ -e "$LOCK" ]; then
+  # 锁存在但超过 5 分钟视为过期(可能上次异常退出), 强制清理后继续
+  if [ -n "$(find "$LOCK" -mmin +5 2>/dev/null)" ]; then
+    rm -f "$LOCK"
+  else
+    exit 0
+  fi
+fi
+touch "$LOCK"
+
+# 后台延迟 15s 执行, 确保网络完全稳定后再检测修复
 (
   sleep 15
   sh "$CHECK_SCRIPT" 2>&1 | logger -t vpn-auto-fix
+  rm -f "$LOCK"
 ) &
+
+exit 0
