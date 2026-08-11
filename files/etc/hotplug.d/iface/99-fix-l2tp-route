@@ -1,18 +1,21 @@
 #!/bin/sh
-# X1Pro VPN 自动检测+修复 — hotplug 脚本
-# 任意网络接口变化(UP)后 15s, 调用 /root/vpn-check.sh 检测并修复
-# 合并到固件: files/etc/hotplug.d/iface/99-fix-l2tp-route
+# X1Pro VPN auto-check + auto-fix — hotplug script
+# Triggered on ANY network interface UP event; runs /root/vpn-check.sh 15s later
+# Built into firmware via: files/etc/hotplug.d/iface/99-fix-l2tp-route
 
+# Only act on "ifup" events (ignore ifdown / ifchange)
 [ "$ACTION" = "ifup" ] || exit 0
+
+# Skip loopback interface
 [ "$INTERFACE" = "loopback" ] && exit 0
 
 CHECK_SCRIPT="/root/vpn-check.sh"
 
-# 只在有 L2TP 接口且 vpn-check.sh 存在时执行
+# Only proceed if vpn-check.sh exists AND an L2TP interface is configured
 [ -f "$CHECK_SCRIPT" ] || exit 0
 uci show network 2>/dev/null | grep -q "proto='l2tp'" || exit 0
 
-# 后台延迟执行, 等网络完全稳定
+# Run in background with a delay so the network is fully stable before checking
 (
   sleep 15
   sh "$CHECK_SCRIPT" 2>&1 | logger -t vpn-auto-fix
