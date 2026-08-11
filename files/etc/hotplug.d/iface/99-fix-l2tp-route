@@ -9,7 +9,7 @@
 CHECK_SCRIPT="/root/vpn-check.sh"
 
 # 只在有 L2TP 接口且 vpn-check.sh 存在时执行
-[ -x "$CHECK_SCRIPT" ] || exit 0
+[ -f "$CHECK_SCRIPT" ] || exit 0
 uci show network 2>/dev/null | grep -q "proto='l2tp'" || exit 0
 
 # 后台延迟执行, 等网络完全稳定
