@@ -79,7 +79,7 @@ else
   _must "L2TP 用户名" L2TP_USER "$L2TP_USER"
   _must_sec "L2TP 密码" L2TP_PASS "$L2TP_PASS"
   _must_sec "IPsec PSK" PSK "$PSK"
-  printf 'MTU [%s]: ' "${MTU:-1400}"; read -r v; [ -n "$v" ] && MTU="$v"
+  [ -n "$MTU" ] || { printf 'MTU [1400]: '; read -r v; MTU="${v:-1400}"; }
 fi
 
 # 最终校验: 缺任何必填则退出
