@@ -264,6 +264,12 @@ jobs:
           # 加载配置
           cp -f "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
 
+          # 复制 files/ overlay (固件自带的持久化文件)
+          if [ -d "$GITHUB_WORKSPACE/files" ]; then
+            cp -rf "$GITHUB_WORKSPACE/files" /workdir/openwrt/
+            echo "[ok] files/ overlay 已加载 ($(find $GITHUB_WORKSPACE/files -type f | wc -l) 文件)"
+          fi
+
           # 执行 diy 脚本
           chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
           "$GITHUB_WORKSPACE/$DIY_P1_SH"
