@@ -17,38 +17,18 @@ auto_detect_ifname() {
         | head -1
 }
 
-# --- 交互输入辅助 (检测不到时请求用户输入) ---
-# hotplug 调用时无终端 → 静默退出, 不污染日志
-_have_tty() { [ -t 0 ] && return 0 || return 1; }
-_noprompt_exit() {
-    _have_tty && return 1 || { exit 0; }
-}
+# 接口名: CLI arg > conf > UCI 自动检测, 都无则退出
+[ -n "$1" ] && IFNAME="$1"
+[ -z "$IFNAME" ] && IFNAME="${IFNAME:-$(auto_detect_ifname)}"
+[ -z "$IFNAME" ] && { echo "[skip] 未找到 L2TP 接口"; exit 0; }
 
-# 接口名: CLI arg > conf > UCI 自动检测 > 交互询问 (hotplug 静默退出)
-if [ -n "$1" ]; then
-    IFNAME="$1"
-else
-    IFNAME="${IFNAME:-$(auto_detect_ifname)}"
-    [ -z "$IFNAME" ] && { _have_tty || exit 0; }
-    while [ -z "$IFNAME" ]; do
-        printf "L2TP 接口名: "; read -r IFNAME
-        [ -z "$IFNAME" ] && echo "  [!] 接口名不能为空"
-    done
-fi
-
-# 远端目标 IP: CLI arg > conf > UCI (l2tp-fixup 持久化) > 交互 (> hotplug 静默退出)
+# 远端目标 IP: CLI arg > conf > UCI, 都无则退出
 [ -n "$2" ] && DST_TARGET="$2"
 [ -z "$DST_TARGET" ] && DST_TARGET=$(uci -q get network.$IFNAME.dst_target 2>/dev/null)
 [ -z "$DST_TARGET" ] && DST_TARGET=$(uci -q get network.vpn_route.target 2>/dev/null)
-if [ -z "$DST_TARGET" ]; then
-    _have_tty || exit 0
-    while [ -z "$DST_TARGET" ]; do
-        printf "  远端目标IP(如 10.0.0.253): "; read -r DST_TARGET
-        [ -z "$DST_TARGET" ] && echo "  [!] 不能为空"
-    done
-fi
+[ -z "$DST_TARGET" ] && { echo "[skip] DST_TARGET 未配置"; exit 0; }
 
-# 远端网段: conf > CLI arg > UCI (l2tp-fixup 持久化 > vpn_route) > 交互 (> hotplug 静默退出)
+# 远端网段: conf > CLI arg > UCI > vpn_route 推断, 都无则退出
 [ -z "$DST_SUBNET" ] && [ -n "$3" ] && DST_SUBNET="$3"
 [ -z "$DST_SUBNET" ] && DST_SUBNET=$(uci -q get network.$IFNAME.dst_subnet 2>/dev/null)
 if [ -z "$DST_SUBNET" ]; then
@@ -58,16 +38,9 @@ if [ -z "$DST_SUBNET" ]; then
         255.255.255.0) DST_SUBNET="$RT_TARGET/24" ;;
         255.255.0.0)   DST_SUBNET="$RT_TARGET/16" ;;
         255.0.0.0)     DST_SUBNET="$RT_TARGET/8"  ;;
-        *)             DST_SUBNET="" ;;
     esac
 fi
-if [ -z "$DST_SUBNET" ]; then
-    _have_tty || exit 0
-    while [ -z "$DST_SUBNET" ]; do
-        printf "  远端网段(如 10.0.0.0/24): "; read -r DST_SUBNET
-        [ -z "$DST_SUBNET" ] && echo "  [!] 不能为空"
-    done
-fi
+[ -z "$DST_SUBNET" ] && { echo "[skip] DST_SUBNET 未配置"; exit 0; }
 
 NET_DEV="l2tp-$IFNAME"
 
