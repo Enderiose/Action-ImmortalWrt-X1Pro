@@ -343,21 +343,71 @@ for ATT in 1 2 3; do
 done
 [ $IPSEC_OK -eq 1 ] || { echo "[ERROR] IPsec 多次重试仍失败, 请检查 WAN/服务端/PSK/rightid"; exit 1; }
 
-# ---------- 8. 拉起 L2TP (重试) ----------
+# ---------- 8. 拉起 L2TP (绕过 netifd, 直接 xl2tpd-control) ----------
+# 原因: netifd ifup 在某些固件有 race condition, teardown 先跑然后 setup 静默失败
+#   日志: "xl2tpd[xxx]: No such tunnel l2tp-123" → "Interface now down"
+#   参见: netifd proto_l2tp_setup 中的 resolveip 耗时 + add-lac 无重试
+_l2tp_pppopt(){
+  cat > "/tmp/l2tp/options.$IFNAME" <<PPPOF
+usepeerdns
+nodefaultroute
+ipparam "$IFNAME"
+ifname "l2tp-$IFNAME"
+ip-up-script /lib/netifd/ppp-up
+ipv6-up-script /lib/netifd/ppp-up
+ip-down-script /lib/netifd/ppp-down
+ipv6-down-script /lib/netifd/ppp-down
+lcp-max-terminate 0
+user "$L2TP_USER" password "$L2TP_PASS"
+mtu $MTU mru $MTU
+PPPOF
+}
+
 L2TP_OK=0
 for ATT in 1 2 3; do
   echo "[7] 拉起 L2TP (尝试 $ATT/3) ..."
-  ifdown $IFNAME >/dev/null 2>&1; sleep 2
-  ifup $IFNAME >/dev/null 2>&1
+
+  # 确保 xl2tpd 在运行
+  if ! pgrep xl2tpd >/dev/null 2>&1; then
+    /etc/init.d/xl2tpd restart >/dev/null 2>&1
+    sleep 2
+  fi
+
+  # 先清理旧隧道
+  xl2tpd-control remove-lac l2tp-$IFNAME 2>/dev/null
+  sleep 1
+  ip link del l2tp-$IFNAME 2>/dev/null
+
+  # 写 pppd 选项文件 + xl2tp-secrets
+  mkdir -p /tmp/l2tp
+  _l2tp_pppopt
+  echo "$L2TP_USER * $L2TP_PASS *" > /etc/xl2tpd/xl2tp-secrets
+
+  # 用 xl2tpd-control 添加连接 (绕过 netifd)
+  xl2tpd-control add-lac "l2tp-$IFNAME" pppoptfile="/tmp/l2tp/options.$IFNAME" lns="$IPSEC_SERVER" 2>&1 || {
+    echo "  [!] add-lac 失败, 重试..."
+    continue
+  }
+  sleep 1
+  xl2tpd-control connect-lac "l2tp-$IFNAME" 2>&1
+
+  # 等待 ppp 接口出现 (最多 30s)
   t=0
   while [ $t -lt 30 ]; do
-    ifstatus $IFNAME 2>/dev/null | grep -q '"up": true' && { L2TP_OK=1; break 2; }
-    sleep 3; t=$((t + 3))
+    # 检查 sysfs 目录是否出现 (比 ifstatus 更可靠)
+    if [ -d "/sys/class/net/l2tp-$IFNAME" ]; then
+      local_ip=$(ip addr show "l2tp-$IFNAME" 2>/dev/null | awk '/inet /{print $2}' | head -1)
+      if [ -n "$local_ip" ]; then
+        L2TP_OK=1
+        break 2
+      fi
+    fi
+    sleep 2; t=$((t + 2))
   done
-  echo "  [!] L2TP 未 UP, 重试..."
+  echo "  [!] L2TP 未 UP (尝试 $ATT/3), 重试..."
 done
-[ $L2TP_OK -eq 1 ] || { echo "[ERROR] L2TP 无法 UP"; exit 1; }
-log "[ok] L2TP UP"
+[ $L2TP_OK -eq 1 ] || { echo "[ERROR] L2TP 无法 UP"; logread | grep -E "xl2tpd|pppd|$IFNAME" | tail -20; exit 1; }
+log "[ok] L2TP UP, IP: $local_ip"
 
 # ---------- 9. 静态路由 (幂等 + 即时) ----------
 uci set network.vpn_route=route
