@@ -261,13 +261,21 @@ wait_established(){
   return 1
 }
 bring_ipsec(){
-  /etc/init.d/ipsec restart >/dev/null 2>&1
+  # 彻底停掉所有残留的 charon/starter (自编译固件 init stop 可能杀不干净)
+  /etc/init.d/ipsec stop >/dev/null 2>&1
+  killall -9 charon starter 2>/dev/null
+  sleep 1
+  # 确保 ipsec.conf 存在 (缺失则从 UCI 重建)
+  [ -f /etc/ipsec.conf ] || { log "[!] ipsec.conf 缺失, 从 UCI 重建"; /etc/uci-defaults/92-recover-ipsec; }
+  ipsec start >/dev/null 2>&1
   wait_established
 }
 IPSEC_OK=0
 for ATT in 1 2 3; do
   echo "[7] 启动 IPsec (尝试 $ATT/3) ..."
   /etc/init.d/ipsec stop >/dev/null 2>&1
+  killall -9 charon starter 2>/dev/null
+  sleep 1
   ip xfrm state flush >/dev/null 2>&1
   # 确保默认路由在 WAN
   fix_default_route
