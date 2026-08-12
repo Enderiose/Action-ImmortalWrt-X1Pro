@@ -264,10 +264,15 @@ jobs:
           # 加载配置
           cp -f "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
 
-          # 复制 files/ overlay (固件自带的持久化文件)
+          # files/ overlay: 通用 (NPS 客户端 GUI 等, 所有固件都编入)
           if [ -d "$GITHUB_WORKSPACE/files" ]; then
             cp -rf "$GITHUB_WORKSPACE/files" /workdir/openwrt/
             echo "[ok] files/ overlay 已加载 ($(find $GITHUB_WORKSPACE/files -type f | wc -l) 文件)"
+          fi
+          # files-vpn/ overlay: VPN 专属 (hotplug/vpn-check, 仅 vpn 固件编入)
+          if [ "$PROXY" = "vpn" ] && [ -d "$GITHUB_WORKSPACE/files-vpn" ]; then
+            cp -rf "$GITHUB_WORKSPACE/files-vpn"/* /workdir/openwrt/files/
+            echo "[ok] files-vpn/ overlay 已合并 ($(find $GITHUB_WORKSPACE/files-vpn -type f | wc -l) 文件)"
           fi
 
           # 执行 diy 脚本
