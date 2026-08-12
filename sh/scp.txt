@@ -1,2 +1,0 @@
-sshpass -p '1' scp -o StrictHostKeyChecking=no /Users/macstudio/Desktop/yvzz/l2tp-fixup.sh root@192.168.6.1:/tmp/l2tp-fixup.sh
-scp -o StrictHostKeyChecking=no l2tp-fixup.sh root@192.168.6.1:/tmp/l2tp-fixup.sh
