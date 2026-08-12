@@ -27,7 +27,7 @@ else
 fi
 
 # 远端目标 IP: 参数2 > conf DST_TARGET > 默认
-DST_TARGET="${2:-${DST_TARGET:-10.0.0.253}}"
+DST_TARGET="${2:-${DST_TARGET}}"
 
 # 远端网段: conf DST_SUBNET > 参数3 > UCI > 默认
 if [ -n "$DST_SUBNET" ]; then
@@ -41,7 +41,7 @@ else
         255.255.255.0) DST_SUBNET="$RT_TARGET/24" ;;
         255.255.0.0)   DST_SUBNET="$RT_TARGET/16" ;;
         255.0.0.0)     DST_SUBNET="$RT_TARGET/8"  ;;
-        "")            DST_SUBNET="10.0.0.0/24" ;;
+        "")            DST_SUBNET="" ;;
         *)             DST_SUBNET="$RT_TARGET/24" ;;
     esac
 fi
