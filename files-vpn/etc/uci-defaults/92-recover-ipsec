@@ -1,55 +1,67 @@
 #!/bin/sh
-# uci-defaults: 升级后自动重建 L2TP/IPsec 运行时配置
-# sysupgrade 保留 /etc/config/* 但不保留 /etc/ipsec.* /etc/ppp/*
-# 本脚本从 UCI 的 network.<l2tp-if>.psks / .ike_rightid 重建这些文件
+# uci-defaults: 升级后从 UCI 重建 L2TP/IPsec 运行时配置
+# 不写死任何参数 — 全部来自 network.<if>.ike_* / .psks / .server 等 UCI 字段
+# 这些字段由 l2tp-fixup.sh 运行时写入, sysupgrade -c 自动备份
 
-# 只在 ipsec.conf 缺失时才重建 (全新刷机用 l2tp-fixup.sh 创建, 本脚本不干预)
 [ -f /etc/ipsec.conf ] && exit 0
 
 for ifname in $(uci show network 2>/dev/null | sed -n 's/^network\.\([^=]*\)=interface/\1/p'); do
     proto=$(uci -q get network.$ifname.proto)
     [ "$proto" = "l2tp" ] || continue
 
-    # 提取配置
+    # 提取全部 ipsec 相关字段 (缺失则用默认值)
     psk=$(uci -q get network.$ifname.psks)
-    rightid=$(uci -q get network.$ifname.ike_rightid)
     server=$(uci -q get network.$ifname.server)
     user=$(uci -q get network.$ifname.username)
     pass=$(uci -q get network.$ifname.password)
 
     [ -z "$psk" ] || [ -z "$server" ] && { logger -t vpn-recover "缺少 PSK/server, 跳过 $ifname"; continue; }
 
+    rightid=$(uci -q get network.$ifname.ike_rightid)
+    [ -z "$rightid" ] && rightid="$server"
+
+    # ipsec 参数 (带默认值, 兼容旧配置没存这些字段的情况)
+    keyexchange=$(uci -q get network.$ifname.ike_keyexchange);  [ -z "$keyexchange" ]  && keyexchange='ikev1'
+    algo_ike=$(uci -q get network.$ifname.ike_algo);            [ -z "$algo_ike" ]      && algo_ike='aes256-sha256-modp2048,aes256-sha1-modp1024,3des-sha1-modp1024!'
+    algo_esp=$(uci -q get network.$ifname.ike_esp);             [ -z "$algo_esp" ]      && algo_esp='aes256-sha256,aes256-sha1,3des-sha1!'
+    type=$(uci -q get network.$ifname.ike_type);                [ -z "$type" ]          && type='transport'
+    auto=$(uci -q get network.$ifname.ike_auto);                [ -z "$auto" ]          && auto='start'
+    keyingtries=$(uci -q get network.$ifname.ike_keyingtries);  [ -z "$keyingtries" ]   && keyingtries='%forever'
+    dpdaction=$(uci -q get network.$ifname.ike_dpdaction);      [ -z "$dpdaction" ]     && dpdaction='restart'
+    dpddelay=$(uci -q get network.$ifname.ike_dpddelay);        [ -z "$dpddelay" ]      && dpddelay='30s'
+    dpdtimeout=$(uci -q get network.$ifname.ike_dpdtimeout);    [ -z "$dpdtimeout" ]    && dpdtimeout='120s'
+
     logger -t vpn-recover "升级后重建 IPsec 配置 (interface=$ifname)"
 
-    # 重建 ipsec.secrets
+    # ipsec.secrets
     echo ": PSK \"$psk\"" > /etc/ipsec.secrets
     chmod 600 /etc/ipsec.secrets
 
-    # 重建 ipsec.conf
+    # ipsec.conf
     cat > /etc/ipsec.conf <<INNEREOF
 config setup
     charondebug="ike 1, knl 1, cfg 0"
     uniqueids=no
 
 conn l2tp-$ifname
-    keyexchange=ikev1
-    ike=aes256-sha256-modp2048,aes256-sha1-modp1024,3des-sha1-modp1024!
-    esp=aes256-sha256,aes256-sha1,3des-sha1!
+    keyexchange=$keyexchange
+    ike=$algo_ike
+    esp=$algo_esp
     left=%defaultroute
     leftprotoport=17/1701
     right=$server
-    rightid=${rightid:-$server}
+    rightid=$rightid
     rightprotoport=17/1701
-    type=transport
+    type=$type
     authby=secret
-    auto=start
-    keyingtries=%forever
-    dpdaction=restart
-    dpddelay=30s
-    dpdtimeout=120s
+    auto=$auto
+    keyingtries=$keyingtries
+    dpdaction=$dpdaction
+    dpddelay=$dpddelay
+    dpdtimeout=$dpdtimeout
 INNEREOF
 
-    # 重建 chap-secrets
+    # chap-secrets
     if [ -n "$user" ] && [ -n "$pass" ]; then
         grep -qxF "$user * $pass *" /etc/ppp/chap-secrets 2>/dev/null || \
             echo "$user * $pass *" >> /etc/ppp/chap-secrets
@@ -60,9 +72,7 @@ INNEREOF
         sed -i 's/^[[:space:]]*load[[:space:]]*=[[:space:]]*yes/load = no/' \
             /etc/strongswan.d/charon/kernel-libipsec.conf
 
-    # 启动 IPsec
     /etc/init.d/ipsec restart >/dev/null 2>&1
-
     logger -t vpn-recover "IPsec 配置已恢复, service 已重启"
     break
 done
