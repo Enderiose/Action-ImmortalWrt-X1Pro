@@ -273,6 +273,12 @@ uci set network.$IFNAME.ike_dpdtimeout='120s'
 uci commit network
 log "[ok] ipsec 参数已持久到 UCI"
 
+# 持久化 DST_TARGET/DST_SUBNET → 供 vpn-check.sh / hotplug 自动检测
+uci set network.$IFNAME.dst_target="$DST_TARGET"
+uci set network.$IFNAME.dst_subnet="$DST_SUBNET"
+uci commit network
+log "[ok] DST_TARGET/SUBNET 已持久到 UCI"
+
 # ---------- 6. 防火墙 (必须先配, 否则 IPsec 的 UDP 500/4500 被拦) -----
 echo "[6] 配置防火墙 ..."
 # WAN zone: 放行 IPsec IKE/NAT-T (UDP 500, 4500) + L2TP (UDP 1701) 入站
