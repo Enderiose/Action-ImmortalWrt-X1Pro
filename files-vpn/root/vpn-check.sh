@@ -142,27 +142,65 @@ fix_ipsec() {
 }
 
 fix_l2tp_up() {
-    echo "  → 修复: 重新拉起 L2TP (ifdown/ifup) ..."
-    ifdown "$IFNAME" >/dev/null 2>&1; sleep 2
-    ifup "$IFNAME" >/dev/null 2>&1
+    echo "  → 修复: 重新拉起 L2TP (xl2tpd-control) ..."
+    # 清旧
+    xl2tpd-control remove-lac "l2tp-$IFNAME" 2>/dev/null || true
+    ip link del "l2tp-$IFNAME" 2>/dev/null || true
+    sleep 1
+    # 确保 xl2tpd 在运行
+    if ! pgrep xl2tpd >/dev/null 2>&1; then
+        /etc/init.d/xl2tpd restart >/dev/null 2>&1
+        sleep 2
+    fi
+    # 读 UCI 配置
+    local srv=$(uci -q get network.$IFNAME.server)
+    local user=$(uci -q get network.$IFNAME.username)
+    local pass=$(uci -q get network.$IFNAME.password)
+    local mtu=$(uci -q get network.$IFNAME.mtu)
+    [ -z "$mtu" ] && mtu=1400
+    # 写 pppd 选项
+    mkdir -p /tmp/l2tp
+    cat > "/tmp/l2tp/options.$IFNAME" <<PPPOPT
+usepeerdns
+nodefaultroute
+ipparam "$IFNAME"
+ifname "l2tp-$IFNAME"
+ip-up-script /lib/netifd/ppp-up
+ipv6-up-script /lib/netifd/ppp-up
+ip-down-script /lib/netifd/ppp-down
+ipv6-down-script /lib/netifd/ppp-down
+lcp-max-terminate 0
+user "$user" password "$pass"
+mtu $mtu mru $mtu
+PPPOPT
+    echo "$user * $pass *" > /etc/xl2tpd/xl2tp-secrets
+    # 拨号
+    xl2tpd-control add-lac "l2tp-$IFNAME" pppoptfile="/tmp/l2tp/options.$IFNAME" lns="$srv" 2>/dev/null || {
+        sleep 2
+        xl2tpd-control add-lac "l2tp-$IFNAME" pppoptfile="/tmp/l2tp/options.$IFNAME" lns="$srv" 2>/dev/null
+    }
+    sleep 1
+    xl2tpd-control connect-lac "l2tp-$IFNAME" 2>/dev/null
+    # 等待接口出现
     local t=0
     while [ $t -lt 30 ]; do
-        ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' && break
-        sleep 3; t=$((t + 3))
+        if [ -d "/sys/class/net/l2tp-$IFNAME" ]; then
+            IP=$(ip addr show "l2tp-$IFNAME" 2>/dev/null | awk '/inet /{print $2}' | head -1)
+            if [ -n "$IP" ]; then
+                FIXED=$((FIXED+1)); echo "  [fixed] L2TP UP, IP: $IP"
+                fix_default_route >/dev/null 2>&1
+                return 0
+            fi
+        fi
+        sleep 2; t=$((t + 2))
     done
-    if ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'; then
-        IP=$(ifstatus "$IFNAME" 2>/dev/null | sed -n 's/.*"address": "\([^"]*\)".*/\1/p' | head -1)
-        FIXED=$((FIXED+1)); echo "  [fixed] L2TP UP, IP: $IP"
-        fix_default_route >/dev/null 2>&1
-        return 0
-    fi
     return 1
 }
 
 fix_ping_target() {
     echo "  → 修复: ping $DST_TARGET ..."
     ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV" || fix_subnet_route >/dev/null 2>&1
-    ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up
+    [ -d "/sys/class/net/l2tp-$IFNAME" ] || fix_l2tp_up >/dev/null 2>&1
     if ping -c 3 -W 2 "$DST_TARGET" >/dev/null 2>&1; then
         FIXED=$((FIXED+1)); echo "  [fixed] ping $DST_TARGET 通"; return 0
     fi
@@ -173,7 +211,7 @@ fix_ping_target() {
 fix_curl_target() {
     echo "  → 修复: curl $DST_TARGET ..."
     ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec
-    ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up
+    [ -d "/sys/class/net/l2tp-$IFNAME" ] || fix_l2tp_up >/dev/null 2>&1
     ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV" || fix_subnet_route >/dev/null 2>&1
     CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$DST_TARGET/" 2>/dev/null)
     [ "$CODE" = "000" ] && CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "https://$DST_TARGET/" 2>/dev/null)
@@ -233,12 +271,16 @@ if [ "$ESP" -lt 1 ]; then
     if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] ESP 修复失败"; fi
 fi
 
-# [5] L2TP UP
+# [5] L2TP UP (用 /sys/class/net + ip addr 代替 ifstatus, 兼容绕过 netifd 的隧道)
 echo "[5] L2TP 接口"
-IP=$(ifstatus "$IFNAME" 2>/dev/null | sed -n 's/.*"address": "\([^"]*\)".*/\1/p' | head -1)
-ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'
+if [ -d "/sys/class/net/l2tp-$IFNAME" ]; then
+    IP=$(ip addr show "l2tp-$IFNAME" 2>/dev/null | awk '/inet /{print $2}' | head -1)
+else
+    IP=""
+fi
+[ -n "$IP" ]
 check $? "L2TP UP, IP: ${IP:-无}"
-if ! ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'; then
+if [ -z "$IP" ]; then
     if fix_l2tp_up; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else die "L2TP 接口修复失败"; fi
 fi
 

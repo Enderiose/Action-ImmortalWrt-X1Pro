@@ -103,14 +103,6 @@ echo "  subnet=$DST_SUBNET  target=$DST_TARGET"
 echo "  user=$L2TP_USER"
 echo "=============================================="
 
-echo "=============================================="
-echo " 应用配置:"
-echo "  if=$IFNAME (dev l2tp-$IFNAME)"
-echo "  server=$IPSEC_SERVER  rightid=$IKE_RIGHTID"
-echo "  subnet=$DST_SUBNET  target=$DST_TARGET"
-echo "  user=$L2TP_USER"
-echo "=============================================="
-
 # CIDR -> target / netmask
 NET_TARGET="${DST_SUBNET%/*}"
 NET_PREFIX="${DST_SUBNET#*/}"
