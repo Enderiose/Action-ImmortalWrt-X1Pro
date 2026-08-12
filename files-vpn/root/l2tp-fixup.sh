@@ -20,7 +20,7 @@
 CONF="/tmp/l2tp-fixup.conf"
 [ -f "$CONF" ] && . "$CONF"
 
-# ---------- 0. 配置项 (无默认值, 必须提供) ----------
+# ---------- 0. 配置项 ----------
 IFNAME="${IFNAME:-}"
 IPSEC_SERVER="${IPSEC_SERVER:-}"
 DST_SUBNET="${DST_SUBNET:-}"
@@ -31,92 +31,77 @@ L2TP_PASS="${L2TP_PASS:-}"
 PSK="${PSK:-}"
 MTU="${MTU:-1400}"
 
-# 保存 ENV/CONF 初始值作交互默认 (空输入回车即用此值)
-_ifname_ini=$IFNAME _ipp_ini=$IPSEC_SERVER _dsub_ini=$DST_SUBNET _dtgt_ini=$DST_TARGET
-_ike_ini=$IKE_RIGHTID _user_ini=$L2TP_USER _pass_ini=$L2TP_PASS _psk_ini=$PSK
+_have_tty() { [ -t 0 ] && return 0 || return 1; }
 
-# 交互输入 (已有环境变量/conf 则显示默认值按回车确认, 空输入则反复追问)
-# ---------- 接口名 ----------
-while [ -z "$IFNAME" ]; do
-    [ -n "${_ifname_ini:-}" ] && printf "L2TP 逻辑接口名 [%s]: " "$_ifname_ini" || printf "L2TP 逻辑接口名: "
-    read -r v
-    [ -z "$v" ] && v="$_ifname_ini"
-    [ -n "$v" ] && IFNAME="$v"
-    [ -z "$IFNAME" ] && echo "  [!] 接口名不能为空"
-done
+# 无终端 (hotplug/sshpass) → 从 UCI 现有 L2TP 接口自动读取
+# 有终端 → 交互输入
+if ! _have_tty; then
+  [ -z "$IFNAME" ] && IFNAME=$(uci show network 2>/dev/null | sed -n "s/^network\.\([^.]*\)[.]proto='l2tp'$/\1/p" | head -1)
+  if [ -n "$IFNAME" ]; then
+    [ -z "$IPSEC_SERVER" ] && IPSEC_SERVER=$(uci -q get network.$IFNAME.server)
+    [ -z "$DST_SUBNET" ] && DST_SUBNET=$(uci -q get network.$IFNAME.dst_subnet)
+    [ -z "$DST_TARGET" ] && DST_TARGET=$(uci -q get network.$IFNAME.dst_target)
+    [ -z "$IKE_RIGHTID" ] && IKE_RIGHTID=$(uci -q get network.$IFNAME.ike_rightid)
+    [ -z "$L2TP_USER" ] && L2TP_USER=$(uci -q get network.$IFNAME.username)
+    [ -z "$L2TP_PASS" ] && L2TP_PASS=$(uci -q get network.$IFNAME.password)
+    [ -z "$PSK" ] && PSK=$(uci -q get network.$IFNAME.psks)
+    [ -z "$MTU" ] && MTU=$(uci -q get network.$IFNAME.mtu)
+  fi
+else
+  _must() {
+    local prompt="$1" var="$2" current="$3"
+    eval "local val=\$$var"
+    while [ -z "$val" ]; do
+      [ -n "$current" ] && printf '%s [%s]: ' "$prompt" "$current" || printf '%s: ' "$prompt"
+      read -r val
+      [ -z "$val" ] && [ -n "$current" ] && val="$current"
+      [ -z "$val" ] && echo '  [!] 不能为空'
+    done
+    eval "$var=\"$val\""
+  }
+  _must_sec() {
+    local prompt="$1" var="$2" current="$3"
+    eval "local val=\$$var"
+    while [ -z "$val" ]; do
+      [ -n "$current" ] && printf '%s [****]: ' "$prompt" || printf '%s: ' "$prompt"
+      read -s -r val; echo
+      [ -z "$val" ] && [ -n "$current" ] && val="$current"
+      [ -z "$val" ] && echo '  [!] 不能为空'
+    done
+    eval "$var=\"$val\""
+  }
+  _must "L2TP 逻辑接口名" IFNAME "$IFNAME"
+  _must "IPsec 服务器域名或IP" IPSEC_SERVER "$IPSEC_SERVER"
+  _must "远端网段(如 10.0.0.0/24)" DST_SUBNET "$DST_SUBNET"
+  _must "远端目标IP(测试连通)" DST_TARGET "$DST_TARGET"
+  [ -z "$IKE_RIGHTID" ] && IKE_RIGHTID="$DST_TARGET"
+  _must "IKE rightid" IKE_RIGHTID "$IKE_RIGHTID"
+  _must "L2TP 用户名" L2TP_USER "$L2TP_USER"
+  _must_sec "L2TP 密码" L2TP_PASS "$L2TP_PASS"
+  _must_sec "IPsec PSK" PSK "$PSK"
+  printf 'MTU [%s]: ' "${MTU:-1400}"; read -r v; [ -n "$v" ] && MTU="$v"
+fi
 
-# ---------- IPsec 服务器 ----------
-while [ -z "$IPSEC_SERVER" ]; do
-    [ -n "${_ipp_ini:-}" ] && printf "IPsec 服务器域名或IP [%s]: " "$_ipp_ini" || printf "IPsec 服务器域名或IP: "
-    read -r v
-    [ -z "$v" ] && v="$_ipp_ini"
-    [ -n "$v" ] && IPSEC_SERVER="$v"
-    [ -z "$IPSEC_SERVER" ] && echo "  [!] 服务器不能为空"
-done
+# 最终校验: 缺任何必填则退出
+_missing(){ [ -z "$(eval echo \$$1)" ] && echo "  [ERROR] $2 未设置 (无终端时请先跑一次交互版或填 /tmp/l2tp-fixup.conf)"; }
+err=0
+_missing IFNAME "接口名" && err=1
+_missing IPSEC_SERVER "服务器" && err=1
+_missing DST_SUBNET "远端网段" && err=1
+_missing DST_TARGET "远端目标IP" && err=1
+_missing IKE_RIGHTID "IKE rightid" && err=1
+_missing L2TP_USER "L2TP用户名" && err=1
+_missing L2TP_PASS "L2TP密码" && err=1
+_missing PSK "PSK" && err=1
+[ $err -eq 1 ] && exit 1
 
-# ---------- 远端网段 ----------
-while [ -z "$DST_SUBNET" ]; do
-    [ -n "${_dsub_ini:-}" ] && printf "远端网段(CIDR, 如 10.0.0.0/24) [%s]: " "$_dsub_ini" || printf "远端网段(CIDR, 如 10.0.0.0/24): "
-    read -r v
-    [ -z "$v" ] && v="$_dsub_ini"
-    [ -n "$v" ] && DST_SUBNET="$v"
-    [ -z "$DST_SUBNET" ] && echo "  [!] 远端网段不能为空"
-done
-
-# ---------- 远端目标IP ----------
-while [ -z "$DST_TARGET" ]; do
-    [ -n "${_dtgt_ini:-}" ] && printf "远端目标IP(用于测试连通) [%s]: " "$_dtgt_ini" || printf "远端目标IP(用于测试连通): "
-    read -r v
-    [ -z "$v" ] && v="$_dtgt_ini"
-    [ -n "$v" ] && DST_TARGET="$v"
-    [ -z "$DST_TARGET" ] && echo "  [!] 远端目标IP不能为空"
-done
-
-# ---------- IKE rightid ----------
-while [ -z "$IKE_RIGHTID" ]; do
-    if [ -n "$_ike_ini" ]; then
-        printf "IKE rightid (通常=远端目标IP) [%s]: " "$_ike_ini"
-    elif [ -n "$DST_TARGET" ]; then
-        printf "IKE rightid (通常=远端目标IP) [%s]: " "$DST_TARGET"
-    else
-        printf "IKE rightid: "
-    fi
-    read -r v
-    [ -z "$v" ] && { [ -n "$_ike_ini" ] && v="$_ike_ini" || [ -n "$DST_TARGET" ] && v="$DST_TARGET"; }
-    [ -n "$v" ] && IKE_RIGHTID="$v"
-    [ -z "$IKE_RIGHTID" ] && echo "  [!] IKE rightid 不能为空"
-done
-
-# ---------- L2TP 用户名 ----------
-while [ -z "$L2TP_USER" ]; do
-    [ -n "${_user_ini:-}" ] && printf "L2TP 用户名 [%s]: " "$_user_ini" || printf "L2TP 用户名: "
-    read -r v
-    [ -z "$v" ] && v="$_user_ini"
-    [ -n "$v" ] && L2TP_USER="$v"
-    [ -z "$L2TP_USER" ] && echo "  [!] 用户名不能为空"
-done
-
-# ---------- L2TP 密码 ----------
-while [ -z "$L2TP_PASS" ]; do
-    [ -n "${_pass_ini:-}" ] && printf "L2TP 密码 [****]: " || printf "L2TP 密码: "
-    read -s -r v; echo
-    [ -z "$v" ] && [ -n "$_pass_ini" ] && v="$_pass_ini"
-    [ -n "$v" ] && L2TP_PASS="$v"
-    [ -z "$L2TP_PASS" ] && echo "  [!] L2TP 密码不能为空"
-done
-
-# ---------- IPsec PSK ----------
-while [ -z "$PSK" ]; do
-    [ -n "${_psk_ini:-}" ] && printf "IPsec PSK [****]: " || printf "IPsec PSK: "
-    read -s -r v; echo
-    [ -z "$v" ] && [ -n "$_psk_ini" ] && v="$_psk_ini"
-    [ -n "$v" ] && PSK="$v"
-    [ -z "$PSK" ] && echo "  [!] IPsec PSK 不能为空"
-done
-
-# ---------- MTU ----------
-printf "MTU [%s]: " "${MTU:-1400}"
-read -r v; [ -n "$v" ] && MTU="$v"
+echo "=============================================="
+echo " 应用配置:"
+echo "  if=$IFNAME (dev l2tp-$IFNAME)"
+echo "  server=$IPSEC_SERVER  rightid=$IKE_RIGHTID"
+echo "  subnet=$DST_SUBNET  target=$DST_TARGET"
+echo "  user=$L2TP_USER"
+echo "=============================================="
 
 echo "=============================================="
 echo " 应用配置:"
