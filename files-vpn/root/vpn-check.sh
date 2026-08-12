@@ -4,8 +4,7 @@
 # 用法:  sh /tmp/vpn-check.sh [接口名] [远端目标IP] [远端网段]
 #       不传接口名则自动检测第一个 L2TP 接口
 #       conf 优先级: /tmp/l2tp-fixup.conf 中的 DST_TARGET/DST_SUBNET
-# 示例:  sh vpn-check.sh                     # 自动检测+修复
-#        sh vpn-check.sh 001 10.0.0.253 10.0.0.0/24
+# 示例:  sh vpn-check.sh                     # 自动检测+修复, 检测不到会交互询问
 # ============================================================
 
 CONF="/tmp/l2tp-fixup.conf"
@@ -18,32 +17,62 @@ auto_detect_ifname() {
         | head -1
 }
 
+# --- 交互输入辅助 (检测不到时请求用户输入) ---
+_ask() {
+    local prompt="$1" var="$2" current="$3"
+    if [ -n "$current" ]; then
+        printf "%s [%s]: " "$prompt" "$current"
+    else
+        printf "%s: " "$prompt"
+    fi
+    read -r v; [ -n "$v" ] && eval "$var=\"\$v\""
+}
+_ask_required() {
+    local prompt="$1" var="$2" current="$3" val
+    while [ -z "$val" ]; do
+        if [ -n "$current" ]; then
+            printf "%s [%s]: " "$prompt" "$current"
+            read -r val
+            [ -z "$val" ] && val="$current"
+        else
+            printf "%s: " "$prompt"
+            read -r val
+            [ -z "$val" ] && echo "  [!] 此项不能为空"
+        fi
+    done
+    eval "$var=\"\$val\""
+}
+
+# 接口名: CLI arg > conf > UCI 自动检测 > 交互询问
 if [ -n "$1" ]; then
     IFNAME="$1"
 else
-    IFNAME=$(auto_detect_ifname)
-    [ -z "$IFNAME" ] && { echo "错误: 未找到 L2TP 接口"; echo "用法: $0 <接口名> [远端IP] [远端网段]"; exit 1; }
-    echo "自动检测到 L2TP 接口: $IFNAME"
+    IFNAME="${IFNAME:-$(auto_detect_ifname)}"
+    _ask_required "L2TP 接口名" IFNAME "$IFNAME"
 fi
 
-# 远端目标 IP: 参数2 > conf DST_TARGET > 默认
-DST_TARGET="${2:-${DST_TARGET}}"
+# 远端目标 IP: CLI arg > conf > UCI(从已配 L2TP server 推断) > 交互
+[ -n "$2" ] && DST_TARGET="$2"
+if [ -z "$DST_TARGET" ]; then
+    echo "  [auto] DST_TARGET 未设置"
+    _ask_required "  远端目标IP(如 10.0.0.253)" DST_TARGET ""
+fi
 
-# 远端网段: conf DST_SUBNET > 参数3 > UCI > 默认
-if [ -n "$DST_SUBNET" ]; then
-    :  # conf 已有
-elif [ -n "$3" ]; then
-    DST_SUBNET="$3"
-else
+# 远端网段: conf > CLI arg > UCI vpn_route > 交互
+[ -z "$DST_SUBNET" ] && [ -n "$3" ] && DST_SUBNET="$3"
+if [ -z "$DST_SUBNET" ]; then
     RT_TARGET=$(uci -q get network.vpn_route.target 2>/dev/null)
     RT_NETMASK=$(uci -q get network.vpn_route.netmask 2>/dev/null)
     case "$RT_NETMASK" in
         255.255.255.0) DST_SUBNET="$RT_TARGET/24" ;;
         255.255.0.0)   DST_SUBNET="$RT_TARGET/16" ;;
         255.0.0.0)     DST_SUBNET="$RT_TARGET/8"  ;;
-        "")            DST_SUBNET="" ;;
-        *)             DST_SUBNET="$RT_TARGET/24" ;;
+        *)             DST_SUBNET="" ;;
     esac
+    if [ -z "$DST_SUBNET" ]; then
+        echo "  [auto] DST_SUBNET 无法从 UCI 检测"
+        _ask_required "  远端网段(如 10.0.0.0/24)" DST_SUBNET ""
+    fi
 fi
 
 NET_DEV="l2tp-$IFNAME"
