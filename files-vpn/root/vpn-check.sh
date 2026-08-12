@@ -18,66 +18,39 @@ auto_detect_ifname() {
 }
 
 # --- 交互输入辅助 (检测不到时请求用户输入) ---
-# hotplug 调用时无终端, 交互函数降级为 logger 警告
+# hotplug 调用时无终端 → 静默退出, 不污染日志
 _have_tty() { [ -t 0 ] && return 0 || return 1; }
-_ask() {
-    local prompt="$1" var="$2" current="$3" v
-    if [ -n "$current" ]; then
-        _have_tty && printf "%s [%s]: " "$prompt" "$current" || return 1
-    else
-        _have_tty && printf "%s: " "$prompt" || return 1
-    fi
-    read -r v; [ -n "$v" ] && eval "$var=\"\$v\""
-}
-_ask_required() {
-    local prompt="$1" var="$2" current="$3" val
-    if ! _have_tty; then
-        logger -t vpn-check "[WARN] 无交互终端, 无法输入 $prompt (当前=$current)"
-        [ -n "$current" ] && eval "$var=\"\$current\""
-        return 1
-    fi
-    while [ -z "$val" ]; do
-        if [ -n "$current" ]; then
-            printf "%s [%s]: " "$prompt" "$current"
-            read -r val
-            [ -z "$val" ] && val="$current"
-        else
-            printf "%s: " "$prompt"
-            read -r val
-            [ -z "$val" ] && echo "  [!] 此项不能为空"
-        fi
-    done
-    eval "$var=\"\$val\""
+_noprompt_exit() {
+    _have_tty && return 1 || { exit 0; }
 }
 
-# 接口名: CLI arg > conf > UCI 自动检测 > 交互询问
+# 接口名: CLI arg > conf > UCI 自动检测 > 交互询问 (hotplug 静默退出)
 if [ -n "$1" ]; then
     IFNAME="$1"
 else
     IFNAME="${IFNAME:-$(auto_detect_ifname)}"
-    _ask_required "L2TP 接口名" IFNAME "$IFNAME"
+    [ -z "$IFNAME" ] && { _have_tty || exit 0; }
+    while [ -z "$IFNAME" ]; do
+        printf "L2TP 接口名: "; read -r IFNAME
+        [ -z "$IFNAME" ] && echo "  [!] 接口名不能为空"
+    done
 fi
 
-# 远端目标 IP: CLI arg > conf > UCI(从 l2tp-fixup.sh 持久化字段) > UCI(从 vpn_route 推断) > 交互
+# 远端目标 IP: CLI arg > conf > UCI (l2tp-fixup 持久化) > 交互 (> hotplug 静默退出)
 [ -n "$2" ] && DST_TARGET="$2"
+[ -z "$DST_TARGET" ] && DST_TARGET=$(uci -q get network.$IFNAME.dst_target 2>/dev/null)
+[ -z "$DST_TARGET" ] && DST_TARGET=$(uci -q get network.vpn_route.target 2>/dev/null)
 if [ -z "$DST_TARGET" ]; then
-    DST_TARGET=$(uci -q get network.$IFNAME.dst_target 2>/dev/null)
-    echo "  [auto] DST_TARGET=$DST_TARGET (from UCI)"
-fi
-if [ -z "$DST_TARGET" ]; then
-    RT_T2=$(uci -q get network.vpn_route.target 2>/dev/null)
-    [ -n "$RT_T2" ] && DST_TARGET="$RT_T2" && echo "  [auto] DST_TARGET=$DST_TARGET (from vpn_route)"
-fi
-if [ -z "$DST_TARGET" ]; then
-    _ask_required "  远端目标IP(如 10.0.0.253)" DST_TARGET ""
+    _have_tty || exit 0
+    while [ -z "$DST_TARGET" ]; do
+        printf "  远端目标IP(如 10.0.0.253): "; read -r DST_TARGET
+        [ -z "$DST_TARGET" ] && echo "  [!] 不能为空"
+    done
 fi
 
-# 远端网段: conf > CLI arg > UCI(从 l2tp-fixup.sh 持久化) > UCI vpn_route > 交互
+# 远端网段: conf > CLI arg > UCI (l2tp-fixup 持久化 > vpn_route) > 交互 (> hotplug 静默退出)
 [ -z "$DST_SUBNET" ] && [ -n "$3" ] && DST_SUBNET="$3"
-if [ -z "$DST_SUBNET" ]; then
-    DST_SUBNET=$(uci -q get network.$IFNAME.dst_subnet 2>/dev/null)
-    [ -n "$DST_SUBNET" ] && echo "  [auto] DST_SUBNET=$DST_SUBNET (from UCI)"
-fi
+[ -z "$DST_SUBNET" ] && DST_SUBNET=$(uci -q get network.$IFNAME.dst_subnet 2>/dev/null)
 if [ -z "$DST_SUBNET" ]; then
     RT_TARGET=$(uci -q get network.vpn_route.target 2>/dev/null)
     RT_NETMASK=$(uci -q get network.vpn_route.netmask 2>/dev/null)
@@ -87,10 +60,13 @@ if [ -z "$DST_SUBNET" ]; then
         255.0.0.0)     DST_SUBNET="$RT_TARGET/8"  ;;
         *)             DST_SUBNET="" ;;
     esac
-    [ -n "$DST_SUBNET" ] && echo "  [auto] DST_SUBNET=$DST_SUBNET (from vpn_route)"
 fi
 if [ -z "$DST_SUBNET" ]; then
-    _ask_required "  远端网段(如 10.0.0.0/24)" DST_SUBNET ""
+    _have_tty || exit 0
+    while [ -z "$DST_SUBNET" ]; do
+        printf "  远端网段(如 10.0.0.0/24): "; read -r DST_SUBNET
+        [ -z "$DST_SUBNET" ] && echo "  [!] 不能为空"
+    done
 fi
 
 NET_DEV="l2tp-$IFNAME"

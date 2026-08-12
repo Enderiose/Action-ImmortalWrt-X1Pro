@@ -4,8 +4,7 @@
 # 用法:  sh /tmp/vpn-check.sh [接口名] [远端目标IP] [远端网段]
 #       不传接口名则自动检测第一个 L2TP 接口
 #       conf 优先级: /tmp/l2tp-fixup.conf 中的 DST_TARGET/DST_SUBNET
-# 示例:  sh vpn-check.sh                     # 自动检测+修复
-#        sh vpn-check.sh 001 10.0.0.253 10.0.0.0/24
+# 示例:  sh vpn-check.sh                     # 自动检测+修复, 检测不到会交互询问
 # ============================================================
 
 CONF="/tmp/l2tp-fixup.conf"
@@ -18,32 +17,56 @@ auto_detect_ifname() {
         | head -1
 }
 
+# --- 交互输入辅助 (检测不到时请求用户输入) ---
+# hotplug 调用时无终端 → 静默退出, 不污染日志
+_have_tty() { [ -t 0 ] && return 0 || return 1; }
+_noprompt_exit() {
+    _have_tty && return 1 || { exit 0; }
+}
+
+# 接口名: CLI arg > conf > UCI 自动检测 > 交互询问 (hotplug 静默退出)
 if [ -n "$1" ]; then
     IFNAME="$1"
 else
-    IFNAME=$(auto_detect_ifname)
-    [ -z "$IFNAME" ] && { echo "错误: 未找到 L2TP 接口"; echo "用法: $0 <接口名> [远端IP] [远端网段]"; exit 1; }
-    echo "自动检测到 L2TP 接口: $IFNAME"
+    IFNAME="${IFNAME:-$(auto_detect_ifname)}"
+    [ -z "$IFNAME" ] && { _have_tty || exit 0; }
+    while [ -z "$IFNAME" ]; do
+        printf "L2TP 接口名: "; read -r IFNAME
+        [ -z "$IFNAME" ] && echo "  [!] 接口名不能为空"
+    done
 fi
 
-# 远端目标 IP: 参数2 > conf DST_TARGET > 默认
-DST_TARGET="${2:-${DST_TARGET:-10.0.0.253}}"
+# 远端目标 IP: CLI arg > conf > UCI (l2tp-fixup 持久化) > 交互 (> hotplug 静默退出)
+[ -n "$2" ] && DST_TARGET="$2"
+[ -z "$DST_TARGET" ] && DST_TARGET=$(uci -q get network.$IFNAME.dst_target 2>/dev/null)
+[ -z "$DST_TARGET" ] && DST_TARGET=$(uci -q get network.vpn_route.target 2>/dev/null)
+if [ -z "$DST_TARGET" ]; then
+    _have_tty || exit 0
+    while [ -z "$DST_TARGET" ]; do
+        printf "  远端目标IP(如 10.0.0.253): "; read -r DST_TARGET
+        [ -z "$DST_TARGET" ] && echo "  [!] 不能为空"
+    done
+fi
 
-# 远端网段: conf DST_SUBNET > 参数3 > UCI > 默认
-if [ -n "$DST_SUBNET" ]; then
-    :  # conf 已有
-elif [ -n "$3" ]; then
-    DST_SUBNET="$3"
-else
+# 远端网段: conf > CLI arg > UCI (l2tp-fixup 持久化 > vpn_route) > 交互 (> hotplug 静默退出)
+[ -z "$DST_SUBNET" ] && [ -n "$3" ] && DST_SUBNET="$3"
+[ -z "$DST_SUBNET" ] && DST_SUBNET=$(uci -q get network.$IFNAME.dst_subnet 2>/dev/null)
+if [ -z "$DST_SUBNET" ]; then
     RT_TARGET=$(uci -q get network.vpn_route.target 2>/dev/null)
     RT_NETMASK=$(uci -q get network.vpn_route.netmask 2>/dev/null)
     case "$RT_NETMASK" in
         255.255.255.0) DST_SUBNET="$RT_TARGET/24" ;;
         255.255.0.0)   DST_SUBNET="$RT_TARGET/16" ;;
         255.0.0.0)     DST_SUBNET="$RT_TARGET/8"  ;;
-        "")            DST_SUBNET="10.0.0.0/24" ;;
-        *)             DST_SUBNET="$RT_TARGET/24" ;;
+        *)             DST_SUBNET="" ;;
     esac
+fi
+if [ -z "$DST_SUBNET" ]; then
+    _have_tty || exit 0
+    while [ -z "$DST_SUBNET" ]; do
+        printf "  远端网段(如 10.0.0.0/24): "; read -r DST_SUBNET
+        [ -z "$DST_SUBNET" ] && echo "  [!] 不能为空"
+    done
 fi
 
 NET_DEV="l2tp-$IFNAME"
@@ -131,8 +154,9 @@ fix_ipsec() {
     fix_default_route >/dev/null 2>&1
     ip xfrm state flush >/dev/null 2>&1
     /etc/init.d/ipsec stop >/dev/null 2>&1
+    killall -9 charon starter 2>/dev/null
     sleep 1
-    /etc/init.d/ipsec start >/dev/null 2>&1
+    ipsec start >/dev/null 2>&1
     local t=0
     while [ $t -lt 30 ]; do
         ipsec status 2>/dev/null | grep -q ESTABLISHED && break
