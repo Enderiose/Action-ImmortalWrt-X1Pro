@@ -165,6 +165,12 @@ conn l2tp-$IFNAME
 EOF
 log "[ok] 已写 /etc/ipsec.conf (conn l2tp-$IFNAME)"
 
+# 持久化关键凭据到 UCI (sysupgrade 保留配置时备份, 升级后自动恢复)
+uci set network.$IFNAME.psks="$PSK"
+uci set network.$IFNAME.ike_rightid="$IKE_RIGHTID"
+uci commit network
+log "[ok] PSK/ike_rightid 已持久到 UCI"
+
 # ---------- 4. 清理旧的 VPN 残留 (幂等, 防重复) ----------
 echo "[4] 清理旧 VPN 配置 (接口/路由/防火墙) ..."
 for i in $(uci show network 2>/dev/null | sed -n 's/^network\.\([^=]*\)=interface/\1/p'); do
