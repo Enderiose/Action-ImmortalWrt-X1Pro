@@ -31,32 +31,92 @@ L2TP_PASS="${L2TP_PASS:-}"
 PSK="${PSK:-}"
 MTU="${MTU:-1400}"
 
-# 交互输入 (已有环境变量/conf 则跳过对应提示)
-read -p "L2TP 逻辑接口名: " v; [ -n "$v" ] && IFNAME=$v
-[ -z "$IFNAME" ] && { echo "[ERROR] 接口名不能为空"; exit 1; }
+# 保存 ENV/CONF 初始值作交互默认 (空输入回车即用此值)
+_ifname_ini=$IFNAME _ipp_ini=$IPSEC_SERVER _dsub_ini=$DST_SUBNET _dtgt_ini=$DST_TARGET
+_ike_ini=$IKE_RIGHTID _user_ini=$L2TP_USER _pass_ini=$L2TP_PASS _psk_ini=$PSK
 
-read -p "IPsec 服务器域名或IP: " v; [ -n "$v" ] && IPSEC_SERVER=$v
-[ -z "$IPSEC_SERVER" ] && { echo "[ERROR] 服务器不能为空"; exit 1; }
+# 交互输入 (已有环境变量/conf 则显示默认值按回车确认, 空输入则反复追问)
+# ---------- 接口名 ----------
+while [ -z "$IFNAME" ]; do
+    [ -n "${_ifname_ini:-}" ] && printf "L2TP 逻辑接口名 [%s]: " "$_ifname_ini" || printf "L2TP 逻辑接口名: "
+    read -r v
+    [ -z "$v" ] && v="$_ifname_ini"
+    [ -n "$v" ] && IFNAME="$v"
+    [ -z "$IFNAME" ] && echo "  [!] 接口名不能为空"
+done
 
-read -p "远端网段(CIDR, 如 10.0.0.0/24): " v; [ -n "$v" ] && DST_SUBNET=$v
-[ -z "$DST_SUBNET" ] && { echo "[ERROR] 远端网段不能为空"; exit 1; }
+# ---------- IPsec 服务器 ----------
+while [ -z "$IPSEC_SERVER" ]; do
+    [ -n "${_ipp_ini:-}" ] && printf "IPsec 服务器域名或IP [%s]: " "$_ipp_ini" || printf "IPsec 服务器域名或IP: "
+    read -r v
+    [ -z "$v" ] && v="$_ipp_ini"
+    [ -n "$v" ] && IPSEC_SERVER="$v"
+    [ -z "$IPSEC_SERVER" ] && echo "  [!] 服务器不能为空"
+done
 
-read -p "远端目标IP (用于测试连通): " v; [ -n "$v" ] && DST_TARGET=$v
-[ -z "$DST_TARGET" ] && { echo "[ERROR] 远端目标IP不能为空"; exit 1; }
+# ---------- 远端网段 ----------
+while [ -z "$DST_SUBNET" ]; do
+    [ -n "${_dsub_ini:-}" ] && printf "远端网段(CIDR, 如 10.0.0.0/24) [%s]: " "$_dsub_ini" || printf "远端网段(CIDR, 如 10.0.0.0/24): "
+    read -r v
+    [ -z "$v" ] && v="$_dsub_ini"
+    [ -n "$v" ] && DST_SUBNET="$v"
+    [ -z "$DST_SUBNET" ] && echo "  [!] 远端网段不能为空"
+done
 
-read -p "IKE rightid (通常=远端目标IP): " v; [ -n "$v" ] && IKE_RIGHTID=$v
-[ -z "$IKE_RIGHTID" ] && IKE_RIGHTID="$DST_TARGET"
+# ---------- 远端目标IP ----------
+while [ -z "$DST_TARGET" ]; do
+    [ -n "${_dtgt_ini:-}" ] && printf "远端目标IP(用于测试连通) [%s]: " "$_dtgt_ini" || printf "远端目标IP(用于测试连通): "
+    read -r v
+    [ -z "$v" ] && v="$_dtgt_ini"
+    [ -n "$v" ] && DST_TARGET="$v"
+    [ -z "$DST_TARGET" ] && echo "  [!] 远端目标IP不能为空"
+done
 
-read -p "L2TP 用户名: " v; [ -n "$v" ] && L2TP_USER=$v
-[ -z "$L2TP_USER" ] && { echo "[ERROR] 用户名不能为空"; exit 1; }
+# ---------- IKE rightid ----------
+while [ -z "$IKE_RIGHTID" ]; do
+    if [ -n "$_ike_ini" ]; then
+        printf "IKE rightid (通常=远端目标IP) [%s]: " "$_ike_ini"
+    elif [ -n "$DST_TARGET" ]; then
+        printf "IKE rightid (通常=远端目标IP) [%s]: " "$DST_TARGET"
+    else
+        printf "IKE rightid: "
+    fi
+    read -r v
+    [ -z "$v" ] && { [ -n "$_ike_ini" ] && v="$_ike_ini" || [ -n "$DST_TARGET" ] && v="$DST_TARGET"; }
+    [ -n "$v" ] && IKE_RIGHTID="$v"
+    [ -z "$IKE_RIGHTID" ] && echo "  [!] IKE rightid 不能为空"
+done
 
-[ -z "$L2TP_PASS" ] && { read -s -p "L2TP 密码: " L2TP_PASS; echo; }
-[ -z "$L2TP_PASS" ] && { echo "[ERROR] L2TP 密码不能为空"; exit 1; }
+# ---------- L2TP 用户名 ----------
+while [ -z "$L2TP_USER" ]; do
+    [ -n "${_user_ini:-}" ] && printf "L2TP 用户名 [%s]: " "$_user_ini" || printf "L2TP 用户名: "
+    read -r v
+    [ -z "$v" ] && v="$_user_ini"
+    [ -n "$v" ] && L2TP_USER="$v"
+    [ -z "$L2TP_USER" ] && echo "  [!] 用户名不能为空"
+done
 
-[ -z "$PSK" ] && { read -s -p "IPsec PSK: " PSK; echo; }
-[ -z "$PSK" ] && { echo "[ERROR] IPsec PSK 不能为空"; exit 1; }
+# ---------- L2TP 密码 ----------
+while [ -z "$L2TP_PASS" ]; do
+    [ -n "${_pass_ini:-}" ] && printf "L2TP 密码 [****]: " || printf "L2TP 密码: "
+    read -s -r v; echo
+    [ -z "$v" ] && [ -n "$_pass_ini" ] && v="$_pass_ini"
+    [ -n "$v" ] && L2TP_PASS="$v"
+    [ -z "$L2TP_PASS" ] && echo "  [!] L2TP 密码不能为空"
+done
 
-read -p "MTU [$MTU]: " v; [ -n "$v" ] && MTU=$v
+# ---------- IPsec PSK ----------
+while [ -z "$PSK" ]; do
+    [ -n "${_psk_ini:-}" ] && printf "IPsec PSK [****]: " || printf "IPsec PSK: "
+    read -s -r v; echo
+    [ -z "$v" ] && [ -n "$_psk_ini" ] && v="$_psk_ini"
+    [ -n "$v" ] && PSK="$v"
+    [ -z "$PSK" ] && echo "  [!] IPsec PSK 不能为空"
+done
+
+# ---------- MTU ----------
+printf "MTU [%s]: " "${MTU:-1400}"
+read -r v; [ -n "$v" ] && MTU="$v"
 
 echo "=============================================="
 echo " 应用配置:"
