@@ -165,21 +165,6 @@ conn l2tp-$IFNAME
 EOF
 log "[ok] 已写 /etc/ipsec.conf (conn l2tp-$IFNAME)"
 
-# 持久化关键凭据到 UCI (sysupgrade 保留配置时备份, 升级后自动恢复)
-uci set network.$IFNAME.psks="$PSK"
-uci set network.$IFNAME.ike_rightid="$IKE_RIGHTID"
-uci set network.$IFNAME.ike_keyexchange='ikev1'
-uci set network.$IFNAME.ike_algo='aes256-sha256-modp2048,aes256-sha1-modp1024,3des-sha1-modp1024!'
-uci set network.$IFNAME.ike_esp='aes256-sha256,aes256-sha1,3des-sha1!'
-uci set network.$IFNAME.ike_type='transport'
-uci set network.$IFNAME.ike_auto='start'
-uci set network.$IFNAME.ike_keyingtries='%forever'
-uci set network.$IFNAME.ike_dpdaction='restart'
-uci set network.$IFNAME.ike_dpddelay='30s'
-uci set network.$IFNAME.ike_dpdtimeout='120s'
-uci commit network
-log "[ok] ipsec 参数已持久到 UCI"
-
 # ---------- 4. 清理旧的 VPN 残留 (幂等, 防重复) ----------
 echo "[4] 清理旧 VPN 配置 (接口/路由/防火墙) ..."
 for i in $(uci show network 2>/dev/null | sed -n 's/^network\.\([^=]*\)=interface/\1/p'); do
@@ -212,6 +197,21 @@ uci set network.$IFNAME.auto='1'
 uci set network.$IFNAME.defaultroute='0'
 uci commit network
 log "[ok] 已写 network.$IFNAME (defaultroute=0, 不抢默认路由)"
+
+# 持久化 IPsec 参数到 UCI (sysupgrade 保留配置时备份, 升级后自动恢复)
+uci set network.$IFNAME.psks="$PSK"
+uci set network.$IFNAME.ike_rightid="$IKE_RIGHTID"
+uci set network.$IFNAME.ike_keyexchange='ikev1'
+uci set network.$IFNAME.ike_algo='aes256-sha256-modp2048,aes256-sha1-modp1024,3des-sha1-modp1024!'
+uci set network.$IFNAME.ike_esp='aes256-sha256,aes256-sha1,3des-sha1!'
+uci set network.$IFNAME.ike_type='transport'
+uci set network.$IFNAME.ike_auto='start'
+uci set network.$IFNAME.ike_keyingtries='%forever'
+uci set network.$IFNAME.ike_dpdaction='restart'
+uci set network.$IFNAME.ike_dpddelay='30s'
+uci set network.$IFNAME.ike_dpdtimeout='120s'
+uci commit network
+log "[ok] ipsec 参数已持久到 UCI"
 
 # ---------- 6. 防火墙 (必须先配, 否则 IPsec 的 UDP 500/4500 被拦) -----
 echo "[6] 配置防火墙 ..."
@@ -279,6 +279,8 @@ for ATT in 1 2 3; do
   fi
   if bring_ipsec; then IPSEC_OK=1; echo "  [ok] IPsec ESTABLISHED"; break; fi
   echo "  [!] 未建立. 当前默认路由: $(ip route show default)"
+  echo "  [diag] charon status: $(pgrep charon >/dev/null 2>&1 && echo running || echo dead)"
+  echo "  [diag] ipsec.log tail: $(tail -3 /var/log/daemon 2>/dev/null | grep charon || logread -e charon 2>/dev/null | tail -3)"
 done
 [ $IPSEC_OK -eq 1 ] || { echo "[ERROR] IPsec 多次重试仍失败, 请检查 WAN/服务端/PSK/rightid"; exit 1; }
 
