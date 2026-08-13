@@ -9,7 +9,7 @@
 REPO="https://gitee.com/vvvv/wrt-x1-pro/raw/master"
 DEST_DIR="/root"
 # 新增 change-lan-ip.sh，保持原有两个文件
-FILES="l2tp-fixup.sh vpn-check.sh change-lan-ip.sh"
+FILES="change-lan-ip.sh l2tp-fixup.sh vpn-check.sh"
 
 log(){ echo "  $*"; }
 
@@ -56,9 +56,9 @@ done
 echo "=============================================="
 if [ "$fail" -eq 0 ]; then
   echo " 全部下载完成。建议按以下顺序执行："
-  echo "  1. 修改 LAN 口 IP:   sh $DEST_DIR/change-lan-ip.sh"
-  echo "  2. 配置 VPN:        sh $DEST_DIR/l2tp-fixup.sh"
-  echo "  3. 检测修复 VPN:    sh $DEST_DIR/vpn-check.sh"
+  echo "  1. 修改 LAN:   sh $DEST_DIR/change-lan-ip.sh"
+  echo "  2. 配置 VPN:   sh $DEST_DIR/l2tp-fixup.sh"
+  echo "  3. 检修 VPN:   sh $DEST_DIR/vpn-check.sh"
 else
   echo " 有 $fail 个文件下载失败, 请检查网络后重试"
   echo " (可再次运行: sh $DEST_DIR/fetch-vpn-scripts.sh)"
