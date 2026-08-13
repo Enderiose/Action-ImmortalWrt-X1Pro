@@ -232,8 +232,9 @@ uci set network.$IFNAME.password="$L2TP_PASS"
 uci set network.$IFNAME.mtu="$MTU"
 uci set network.$IFNAME.auto='1'
 uci set network.$IFNAME.defaultroute='0'
+uci set network.$IFNAME.metric='100'
 uci commit network
-log "[ok] 已写 network.$IFNAME (defaultroute=0, 不抢默认路由)"
+log "[ok] 已写 network.$IFNAME (defaultroute=0, metric=100, 不抢默认路由)"
 
 # 持久化 IPsec 参数到 UCI (sysupgrade 保留配置时备份, 升级后自动恢复)
 uci set network.$IFNAME.psks="$PSK"

@@ -44,8 +44,8 @@ uci -q commit network && uci -q export network > "/tmp/network_backup_$(date +%Y
 uci set network.$LAN_IFACE.ipaddr="$new_ip"
 uci commit network
 
-echo "正在重启网络服务以应用新 IP..."
-/etc/init.d/network restart
+echo "正在应用新 IP..."
+/etc/init.d/network reload >/dev/null 2>&1
 
 echo "=================================================="
 echo "✅ LAN 口 IP 已成功修改为 $new_ip"
