@@ -38,7 +38,7 @@ echo 1 > /sys/class/gpio/modem_power/value
 
 ## 第三方软件包
 
-- [OpenClash](https://github.com/vernesong/OpenClash)
+- [OpenClash](https://github.com/vernesong/OpenClash)(可选)
 - [Bandix](https://github.com/timsaya/luci-app-bandix)
 - [luci-theme-aurora](https://github.com/eamonxg/luci-theme-aurora)
 - [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config)
@@ -47,6 +47,10 @@ echo 1 > /sys/class/gpio/modem_power/value
 - kmod-usb-net-cdc-ether
 - kmod-usb-net-rndis
 - kmod-mtd-rw
+- NPC & Frpc客户端
+- 网络唤醒
+- wifi定时
+- 定时重启
 
 ---
 
