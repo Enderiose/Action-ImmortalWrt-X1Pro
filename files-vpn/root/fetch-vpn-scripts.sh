@@ -1,14 +1,15 @@
 #!/bin/sh
 # ============================================================
 # X1Pro VPN 脚本在线更新工具
-# 从 Gitee 仓库下载最新的 l2tp-fixup.sh 和 vpn-check.sh 到 /root/
+# 从 Gitee 仓库下载最新脚本到 /root/
 # 用法:  sh /root/fetch-vpn-scripts.sh
 # 仓库:  https://gitee.com/vvvv/wrt-x1-pro
 # ============================================================
 
 REPO="https://gitee.com/vvvv/wrt-x1-pro/raw/master"
 DEST_DIR="/root"
-FILES="l2tp-fixup.sh vpn-check.sh"
+# 新增 change-lan-ip.sh，保持原有两个文件
+FILES="l2tp-fixup.sh vpn-check.sh change-lan-ip.sh"
 
 log(){ echo "  $*"; }
 
@@ -54,9 +55,10 @@ done
 
 echo "=============================================="
 if [ "$fail" -eq 0 ]; then
-  echo " 全部下载完成. 后续运行:"
-  echo "   配置 VPN:   sh $DEST_DIR/l2tp-fixup.sh"
-  echo "   检测修复:   sh $DEST_DIR/vpn-check.sh"
+  echo " 全部下载完成。建议按以下顺序执行："
+  echo "  1. 修改 LAN 口 IP:   sh $DEST_DIR/change-lan-ip.sh"
+  echo "  2. 配置 VPN:        sh $DEST_DIR/l2tp-fixup.sh"
+  echo "  3. 检测修复 VPN:    sh $DEST_DIR/vpn-check.sh"
 else
   echo " 有 $fail 个文件下载失败, 请检查网络后重试"
   echo " (可再次运行: sh $DEST_DIR/fetch-vpn-scripts.sh)"
