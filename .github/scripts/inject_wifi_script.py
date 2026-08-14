@@ -1,171 +1,136 @@
 #!/usr/bin/env python3
 """
 将 WiFi 默认配置脚本注入到 ImmortalWrt sysupgrade tar 固件中。
-
-用法:
-  python3 inject_wifi_script.py <firmware.bin> <wifi_script.sh>
-
-原理:
-  固件格式: [tar 数据][padding][JSON][metadata footer]
-  我们只修改 tar 部分，不碰 metadata。
+原理：固件 = [tar 数据][padding][metadata]。只修改 tar 部分，不碰 metadata 块。
 """
 
+import io
 import os
 import sys
 import tarfile
-import tempfile
-import shutil
-
-FW_MAGIC = b"FW"  # metadata footer 魔数
+import time
 
 
-def find_metadata_offset(data: bytes) -> int:
-    """找到固件文件中 metadata 块（FW 魔数）的起始位置。"""
+FW_MAGIC = b"FW"  # metadata footer 魔数，位于 tar 数据之后
+
+
+def find_metadata_pos(data: bytes) -> int:
+    """找到固件中 FW metadata 块起始位置（倒序找最后一个 FW）。"""
     pos = data.rfind(FW_MAGIC)
     if pos == -1:
-        raise ValueError("固件中未找到 FW metadata 魔数")
-    # FW 后紧跟 version + flags，再后面是实际 metadata 数据
-    # 确保找到的是真正的 metadata 开头（version='x'=120, flags='0'=48）
-    if pos + 2 < len(data) and data[pos + 2:pos + 3] in (b"x", b"0", b"1"):
-        print(f"  [info] metadata 起始于 offset {pos}")
-        return pos
-    # 往前找
-    pos = data.rfind(b"\x46\x57")  # "FW" in hex
-    if pos == -1:
-        raise ValueError("未找到有效 FW metadata 块")
-    print(f"  [info] metadata 起始于 offset {pos}")
+        raise ValueError("未找到 FW metadata 魔数")
+    print(f"  [info] metadata 起始 offset: {pos}")
     return pos
 
 
-def extract_tar_data(fw_path: str) -> tuple[bytes, bytes]:
+def read_file(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def inject_into_tar(tar_data: bytes, inject_target: str, file_data: bytes, file_mode=0o755) -> bytes:
     """
-    提取固件中的 tar 数据部分（不含 metadata 块）。
-    返回 (tar_data, metadata_tail)。
+    将文件注入 tar，返回新的 tar bytes。
+    inject_target: 相对于 sysupgrade-<board>/ 的路径，如 "etc/uci-defaults/91-set-wifi-default"
     """
-    with open(fw_path, "rb") as f:
-        data = f.read()
+    result = io.BytesIO()
 
-    meta_start = find_metadata_offset(data)
-    tar_data = data[:meta_start]
-    # 处理 tar padding (512-byte aligned，末尾可能有 0)
-    tail = data[meta_start:]
-    return tar_data, tail
-
-
-def list_tar_members(tar_data: bytes) -> list:
-    """列出 tar 中的所有文件成员。"""
-    members = []
-    try:
-        with tarfile.open(fileobj=__import__("io").BytesIO(tar_data)) as tf:
-            members = tf.getnames()
-    except Exception as e:
-        print(f"  [warn] 无法解析 tar: {e}")
-    return members
-
-
-def inject_wifi_script(fw_path: str, wifi_script_path: str) -> bool:
-    """
-    将 WiFi 脚本注入到固件 tar 中。
-    - 如果 uci-defaults/91-set-wifi-default 已存在 → 替换
-    - 如果不存在 → 添加
-    """
-    with open(wifi_script_path, "rb") as f:
-        script_data = f.read()
-
-    script_name = os.path.basename(wifi_script_path)
-    target_path = f"etc/uci-defaults/{script_name}"
-
-    print(f"[inject] 读取固件: {fw_path}")
-    tar_data, metadata_tail = extract_tar_data(fw_path)
-    existing = list_tar_members(tar_data)
-    print(f"  [ok] 当前固件内已有 {len(existing)} 个文件")
-
-    # 解析现有 tar
-    tf_out = __import__("io").BytesIO()
-    inject_target = f"sysupgrade-oray_x1pro-v1-ubootmod/{target_path}"
-
-    added = False
-    with tarfile.open(fileobj=__import__("io").BytesIO(tar_data)) as tf_in:
-        # 复制所有现有成员
-        with tarfile.open(fileobj=tf_out, mode="w", format=tarfile.PAX_FORMAT) as tf_out_inner:
-            # 先写所有现有成员
+    with tarfile.open(fileobj=io.BytesIO(tar_data), mode="r") as tf_in:
+        replaced = False
+        with tarfile.open(fileobj=result, mode="w", format=tarfile.PAX_FORMAT) as tf_out:
             for member in tf_in.getmembers():
                 if member.name == inject_target:
-                    # 跳过旧版本，准备替换
+                    # 跳过旧版本
                     continue
                 data = tf_in.extractfile(member)
                 if data is not None:
-                    tf_out_inner.addfile(member, data)
+                    tf_out.addfile(member, data)
 
-        # 添加/替换 wifi 脚本
-        # 构建 tar header
-        info = tarfile.TarInfo(name=inject_target)
-        info.size = len(script_data)
-        info.mode = 0o755
-        info.uid = 0
-        info.gid = 0
-        info.uname = "root"
-        info.gname = "root"
-        import time
-        info.mtime = int(time.time())
+            # 添加/替换新文件
+            info = tarfile.TarInfo(name=inject_target)
+            info.size = len(file_data)
+            info.mode = file_mode
+            info.uid = 0
+            info.gid = 0
+            info.uname = "root"
+            info.gname = "root"
+            info.mtime = int(time.time())
+            tf_out.addfile(info, io.BytesIO(file_data))
+            replaced = True
 
-        tf_out_inner = __import__("io").BytesIO()
-        with tarfile.open(fileobj=tf_out_inner, mode="w", format=tarfile.PAX_FORMAT) as tf_new:
-            # 先写所有现有成员
-            with tarfile.open(fileobj=__import__("io").BytesIO(tar_data)) as tf_in2:
-                for member in tf_in2.getmembers():
-                    if member.name == inject_target:
-                        continue
-                    data = tf_in2.extractfile(member)
-                    if data is not None:
-                        tf_new.addfile(member, data)
-            # 添加 wifi 脚本
-            tf_new.addfile(info, __import__("io").BytesIO(script_data))
+    return result.getvalue()
 
-        result_data = tf_out_inner.getvalue()
 
-    # 写回固件文件（tar + padding + metadata）
-    new_fw = result_data + metadata_tail
+def inject_wifi_script(fw_path: str, wifi_script_path: str) -> bool:
+    """将 WiFi 脚本注入固件 tar 包。"""
+    script_name = os.path.basename(wifi_script_path)
+    # 注意：board name 在 tar 顶层的目录名中
+    board_prefix = "sysupgrade-oray_x1pro-v1-ubootmod"
+    inject_target = f"{board_prefix}/etc/uci-defaults/{script_name}"
 
-    # 保留原文件备份
+    print(f"[inject] 固件: {fw_path}")
+    print(f"[inject] 脚本: {wifi_script_path}")
+    print(f"[inject] 目标: {inject_target}")
+
+    fw_bytes = read_file(fw_path)
+    meta_pos = find_metadata_pos(fw_bytes)
+    tar_data = fw_bytes[:meta_pos]
+    metadata_tail = fw_bytes[meta_pos:]
+
+    # 检查当前固件内容
+    with tarfile.open(fileobj=io.BytesIO(tar_data), mode="r") as tf:
+        names = tf.getnames()
+    print(f"  [ok] 现有 tar 条目: {len(names)} 个")
+
+    if inject_target in names:
+        print(f"  [info] 替换已有: {inject_target}")
+    else:
+        print(f"  [info] 新增条目: {inject_target}")
+
+    script_bytes = read_file(wifi_script_path)
+    new_tar = inject_into_tar(tar_data, inject_target, script_bytes, file_mode=0o755)
+
+    new_fw = new_tar + metadata_tail
+
+    # 备份原文件
     backup = fw_path + ".bak"
     if not os.path.exists(backup):
-        shutil.copy2(fw_path, backup)
-        print(f"  [ok] 备份原固件为 {backup}")
+        with open(backup, "wb") as f:
+            f.write(fw_bytes)
+        print(f"  [ok] 备份: {backup}")
 
     with open(fw_path, "wb") as f:
         f.write(new_fw)
 
-    size_change = len(new_fw) - (len(tar_data) + len(metadata_tail))
-    print(f"  [ok] 注入完成: +{size_change} bytes")
-    print(f"  [ok] 新固件大小: {len(new_fw)} bytes ({len(new_fw)/1024/1024:.1f} MB)")
+    print(f"  [ok] 完成: {len(new_fw)} bytes ({len(new_fw)/1024/1024:.2f} MB)")
+    print(f"  [ok] 大小变化: {len(new_fw) - len(fw_bytes):+d} bytes")
 
-    # 验证
-    with open(fw_path, "rb") as f:
-        verify = f.read()
-    if FW_MAGIC in verify[:verify.rfind(FW_MAGIC)]:
-        print("  [ERROR] 验证失败：FW 魔数被意外移动")
+    # 验证：WiFi 脚本是否在 tar 内 + metadata 是否完整
+    import io as _io
+    with tarfile.open(fileobj=_io.BytesIO(new_fw[:new_fw.rfind(b"FW")]), mode="r") as tf:
+        names = tf.getnames()
+    if inject_target in names:
+        print(f"  [ok] 验证通过: {inject_target} 已存在于 tar")
+        return True
+    else:
+        print(f"  [ERROR] 验证失败: {inject_target} 不在 tar 中")
         return False
-    print("  [ok] 验证通过：metadata 块位置正确")
-    return True
 
 
 def main():
     if len(sys.argv) < 3:
-        print("用法: python3 inject_wifi_script.py <firmware.bin> <wifi_script.sh>")
+        print("用法: python3 inject_wifi_script.py <固件.bin> <WiFi脚本.sh>")
         sys.exit(1)
-
     fw_path = sys.argv[1]
-    wifi_script = sys.argv[2]
-
+    script_path = sys.argv[2]
     if not os.path.exists(fw_path):
-        print(f"[error] 固件文件不存在: {fw_path}")
+        print(f"[ERROR] 固件不存在: {fw_path}")
         sys.exit(1)
-    if not os.path.exists(wifi_script):
-        print(f"[error] WiFi 脚本不存在: {wifi_script}")
+    if not os.path.exists(script_path):
+        print(f"[ERROR] WiFi 脚本不存在: {script_path}")
         sys.exit(1)
 
-    ok = inject_wifi_script(fw_path, wifi_script)
+    ok = inject_wifi_script(fw_path, script_path)
     sys.exit(0 if ok else 1)
 
 
