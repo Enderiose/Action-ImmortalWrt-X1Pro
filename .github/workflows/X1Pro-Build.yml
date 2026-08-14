@@ -283,6 +283,13 @@ jobs:
           "$GITHUB_WORKSPACE/$DIY_P2_SH"
 
           make defconfig
+
+          # 强制让 files/ overlay 生效：更新 overlay 文件时间戳，防止增量 build 跳过 rootfs 更新
+          find /workdir/openwrt/files -type f -exec touch {} \;
+          # 清理 rootfs stamp，防止增量编译时 overlay 未合并
+          rm -rf /workdir/openwrt/build_dir/target-*/root-*
+          echo "[ok] files/ overlay 已刷新，rootfs 将重新构建"
+
           make download -j$NPROC
 
           # 编译（一次 make 输出两个设备固件）
