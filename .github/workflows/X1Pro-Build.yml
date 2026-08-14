@@ -284,12 +284,8 @@ jobs:
 
           make defconfig
 
-          # 强制让 files/ overlay 生效：更新 overlay 文件时间戳，防止增量 build 跳过 rootfs 更新
-          find /workdir/openwrt/files -type f -exec touch {} \;
-          # 清理 rootfs stamp，强制重建 rootfs 镜像（overlay 必须重新合并到 squashfs）
-          find /workdir/openwrt/build_dir/target-*/linux-filogic_linux-*/ -maxdepth 1 \( -name ".*stamp*" -o -name "*.squashfs*" -o -name "*.rootfs*" \) -delete 2>/dev/null
-          find /workdir/openwrt/staging_dir/target-*/ -maxdepth 2 -name "*.root*stamp*" -delete 2>/dev/null
-          echo "[ok] files/ overlay 已刷新，rootfs 将重新构建"
+          # overlay 文件通过 post-build 注入方式合并到固件（不改 stamp，保持增量编译速度）
+          echo "[ok] files/ overlay 保持原样"
 
           make download -j$NPROC
 
@@ -314,6 +310,14 @@ jobs:
           # 文件名带日期时间：ImmortalWrt-X1Pro-none-20260814-0752-sysupgrade.bin
           FW_NAME="ImmortalWrt-X1Pro-${PROXY}-${BUILD_TIME}-sysupgrade.bin"
           cp "$SYSUPGRADE" "$GITHUB_WORKSPACE/firmware_collection/${FW_NAME}"
+
+          # WiFi 默认脚本注入（所有固件都需要，首次启动自动配置 WiFi）
+          if [ -f "$GITHUB_WORKSPACE/files/etc/uci-defaults/91-set-wifi-default" ]; then
+            echo "[wifi] 注入 WiFi 默认配置脚本到固件..."
+            python3 "$GITHUB_WORKSPACE/.github/scripts/inject_wifi_script.py" \
+              "$GITHUB_WORKSPACE/firmware_collection/${FW_NAME}" \
+              "$GITHUB_WORKSPACE/files/etc/uci-defaults/91-set-wifi-default" || true
+          fi
 
           echo "Compilation successful"
           echo "status=success" >> $GITHUB_OUTPUT
