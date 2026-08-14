@@ -286,8 +286,9 @@ jobs:
 
           # 强制让 files/ overlay 生效：更新 overlay 文件时间戳，防止增量 build 跳过 rootfs 更新
           find /workdir/openwrt/files -type f -exec touch {} \;
-          # 清理 rootfs stamp，防止增量编译时 overlay 未合并
-          rm -rf /workdir/openwrt/build_dir/target-*/root-*
+          # 清理 rootfs stamp，强制重建 rootfs 镜像（overlay 必须重新合并到 squashfs）
+          find /workdir/openwrt/build_dir/target-*/linux-filogic_linux-*/ -maxdepth 1 \( -name ".*stamp*" -o -name "*.squashfs*" -o -name "*.rootfs*" \) -delete 2>/dev/null
+          find /workdir/openwrt/staging_dir/target-*/ -maxdepth 2 -name "*.root*stamp*" -delete 2>/dev/null
           echo "[ok] files/ overlay 已刷新，rootfs 将重新构建"
 
           make download -j$NPROC
