@@ -1,0 +1,64 @@
+#!/bin/sh
+
+# 刷机首启自动配置 WiFi（开源 mt7915e / mac80211 驱动）
+# 默认 SSID: OrayX1Pro / OrayX1Pro_5G
+# 默认密码: 1234567890
+
+board=$(cat /tmp/sysinfo/board_name 2>/dev/null)
+
+# 仅 X1Pro 执行
+case "$board" in
+	oray,x1pro-v1|oray,x1pro-v1-ubootmod) ;;
+	*) exit 0 ;;
+esac
+
+# 已有 SSID 配置则跳过（避免重复执行覆盖用户设置）
+if uci -q get wireless.@wifi-iface[0].ssid >/dev/null 2>&1; then
+	exit 0
+fi
+
+# 等待 wireless 设备就绪（board detect 生成默认 wireless config）
+sleep 3
+
+# 统计 wifi-device 数量
+dev_count=$(uci show wireless 2>/dev/null | grep -c "wifi-device")
+[ "$dev_count" -eq 0 ] && exit 0
+
+# 遍历 wifi-iface，按 band 设置 SSID 和密码
+# mac80211 驱动下：2.4G band=2g 或无 band 字段，5G band=5g
+iface_idx=0
+while uci -q get wireless.@wifi-iface[$iface_idx] >/dev/null 2>&1; do
+	dev=$(uci -q get wireless.@wifi-iface[$iface_idx].device)
+	band=$(uci -q get wireless.$dev.band 2>/dev/null)
+
+	if [ "$band" = "5g" ]; then
+		ssid="OrayX1Pro_5G"
+	else
+		ssid="OrayX1Pro"
+	fi
+
+	uci set wireless.@wifi-iface[$iface_idx].mode="ap"
+	uci set wireless.@wifi-iface[$iface_idx].network="lan"
+	uci set wireless.@wifi-iface[$iface_idx].ssid="$ssid"
+	uci set wireless.@wifi-iface[$iface_idx].encryption="psk2"
+	uci set wireless.@wifi-iface[$iface_idx].key="1234567890"
+
+	# 启用设备
+	uci set wireless.$dev.disabled="0"
+	uci set wireless.$dev.channel="auto"
+	uci set wireless.$dev.country="CN"
+	# htmode 按频段设置
+	case "$band" in
+		5g) uci set wireless.$dev.htmode="HE160" 2>/dev/null ;;
+		2g) uci set wireless.$dev.htmode="HE40" 2>/dev/null ;;
+	esac
+
+	iface_idx=$((iface_idx + 1))
+done
+
+uci commit wireless
+
+# 触发 wifi reload（首启后 netifd 会自动处理，这里兜底）
+wifi reload 2>/dev/null
+
+exit 0
