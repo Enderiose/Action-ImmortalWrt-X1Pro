@@ -111,7 +111,7 @@ jobs:
       - name: Load config & apply diy scripts
         run: |
           cd openwrt
-          cp -f $GITHUB_WORKSPACE/config/128m.config .config
+          cp -f $GITHUB_WORKSPACE/config/x1pro.config .config
           chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
           $GITHUB_WORKSPACE/$DIY_P1_SH
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
@@ -127,9 +127,9 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add config/128m.config
+          git add config/x1pro.config
           git diff --cached --quiet || (
-            git commit -m "Update config: 128m" || true
+            git commit -m "Update config: x1pro" || true
             git pull --rebase origin $(git rev-parse --abbrev-ref HEAD)
             git push -f origin HEAD:$(git rev-parse --abbrev-ref HEAD)
           )
