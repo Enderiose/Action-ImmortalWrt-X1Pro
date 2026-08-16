@@ -1,15 +1,23 @@
 #!/bin/sh
 # ============================================================
-# X1Pro VPN 脚本在线更新工具
-# 从 Gitee 仓库下载最新脚本到 /root/
-# 用法:  sh /root/fetch-vpn-scripts.sh
+# X1Pro VPN 脚本下载器
+# 无参数: 下载 fetch-vpn-scripts.sh 引导脚本 (推荐)
+# 带 *.sh 参数: 仅下载该文件到 /root/
+# 用法:  sh /root/get-scripts.sh [xxx.sh]
 # 仓库:  https://gitee.com/vvvv/wrt-x1-pro
 # ============================================================
 
 REPO="https://gitee.com/vvvv/wrt-x1-pro/raw/master"
 DEST_DIR="/root"
-# 新增 change-lan-ip.sh，保持原有两个文件
-FILES="change-lan-ip.sh l2tp-fixup.sh vpn-check.sh"
+
+# 参数处理: 带 *.sh 参数 → 仅下载该文件; 否则 → 下载引导脚本
+if [ -n "$1" ] && echo "$1" | grep -q '\.sh$'; then
+  FILES="$1"
+  MODE="single"
+else
+  FILES="fetch-vpn-scripts.sh"
+  MODE="bootstrap"
+fi
 
 log(){ echo "  $*"; }
 
@@ -38,7 +46,7 @@ fetch_one(){
 }
 
 echo "=============================================="
-echo " X1Pro VPN 脚本更新"
+echo " X1Pro VPN 脚本下载"
 echo " 仓库: gitee.com/vvvv/wrt-x1-pro"
 echo "=============================================="
 
@@ -55,13 +63,19 @@ done
 
 echo "=============================================="
 if [ "$fail" -eq 0 ]; then
-  echo " 全部下载完成。建议按以下顺序执行："
-  echo "  1. 修改 LAN:   sh $DEST_DIR/change-lan-ip.sh"
-  echo "  2. 配置 VPN:   sh $DEST_DIR/l2tp-fixup.sh"
-  echo "  3. 检修 VPN:   sh $DEST_DIR/vpn-check.sh"
+  if [ "$MODE" = "single" ]; then
+    echo " 已下载: $DEST_DIR/$FILES"
+  else
+    echo " 引导脚本已下载: $DEST_DIR/fetch-vpn-scripts.sh"
+    echo ""
+    echo " 请执行以下命令获取操作脚本:"
+    echo "   sh $DEST_DIR/fetch-vpn-scripts.sh"
+    echo ""
+    echo " 该脚本会下载: change-lan-ip.sh / l2tp-fixup.sh"
+    echo "                vpn-check.sh / l2tp-remove.sh"
+  fi
 else
-  echo " 有 $fail 个文件下载失败, 请检查网络后重试"
-  echo " (可再次运行: sh $DEST_DIR/fetch-vpn-scripts.sh)"
+  echo " 下载失败, 请检查网络后重试: sh $DEST_DIR/get-scripts.sh"
 fi
 echo "=============================================="
 
