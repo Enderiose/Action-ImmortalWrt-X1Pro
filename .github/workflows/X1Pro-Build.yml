@@ -276,6 +276,16 @@ jobs:
             echo "[ok] files-vpn/ overlay 已合并 ($(find $GITHUB_WORKSPACE/files-vpn -type f | wc -l) 文件)"
           fi
 
+          # 编译时间标记 (固件内 /root/compile-time.txt, 精确到分)
+          mkdir -p /workdir/openwrt/files/root
+          {
+            echo "BUILD_TIME=${BUILD_TIME}"
+            echo "BUILD_DATE=${BUILD_DATE}"
+            echo "PROXY=${PROXY}"
+            date '+%Y-%m-%d %H:%M %Z'
+          } > /workdir/openwrt/files/root/compile-time.txt
+          echo "[ok] 编译时间标记已写入 /root/compile-time.txt: $(date '+%Y-%m-%d %H:%M')"
+
           # 执行 diy 脚本
           chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
           "$GITHUB_WORKSPACE/$DIY_P1_SH"
