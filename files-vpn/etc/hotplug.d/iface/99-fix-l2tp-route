@@ -1,15 +1,23 @@
 #!/bin/sh
 # X1Pro VPN 自动检测+修复 — hotplug 脚本
-# 任意网络接口状态变化(ifup/ifdown/ifchange)后延迟 15s, 调用 /root/vpn-check.sh 检测并修复
+# 任意网络接口状态变化(ifup/ifdown/ifchange)后延迟 15s, 调用检测脚本检测并修复
 # 合并到固件: files/etc/hotplug.d/iface/99-fix-l2tp-route
 
 # 跳过 loopback 接口 (无需处理)
 [ "$INTERFACE" = "loopback" ] && exit 0
 
-CHECK_SCRIPT="/root/vpn-check.sh"
+# 检测脚本候选列表(按优先级):
+#   仓库已将脚本重命名为 check-vpn.sh / check-l2tp.sh, 旧版固件可能仍带 vpn-check.sh, 一并兼容
+CHECK_SCRIPT=""
+for cand in /root/check-vpn.sh /root/check-l2tp.sh /root/vpn-check.sh; do
+  [ -f "$cand" ] && { CHECK_SCRIPT="$cand"; break; }
+done
 
-# 前置条件: vpn-check.sh 必须存在, 且网络配置中必须定义了 L2TP 接口
-[ -f "$CHECK_SCRIPT" ] || exit 0
+# 前置条件: 检测脚本必须存在, 且网络配置中必须定义了 L2TP 接口
+[ -n "$CHECK_SCRIPT" ] || {
+  logger -t vpn-auto-fix "未找到检测脚本(check-vpn.sh/check-l2tp.sh/vpn-check.sh), 跳过自动修复"
+  exit 0
+}
 uci show network 2>/dev/null | grep -q "proto='l2tp'" || exit 0
 
 # 锁文件: 防止短时间内多次接口变化导致检测脚本并发执行
