@@ -39,6 +39,26 @@ if [ -f "$BANDIX_MK" ]; then
   fi
 fi
 
+# 2. Fix sysupgrade failure on oray,x1pro-v1-ubootmod
+#    U-Boot 2025.07 未在设备树 chosen 节点设置 rootdisk 属性,
+#    导致 export_fitblk_bootdev() 检测失败 → fit_do_upgrade return 1 → 固件未写入.
+#    补丁: rootdisk 缺失时 fallback 到 UBI 默认参数 (ubi/kernel/rootfs).
+FIT_SH="$OPENWRT/package/base-files/files/lib/upgrade/fit.sh"
+if [ -f "$FIT_SH" ]; then
+  if grep -q 'CI_ROOTPART="rootfs"' "$FIT_SH"; then
+    echo "  → fit.sh: already patched (rootdisk fallback)"
+  else
+    sed -i 's/\[ -n "\$CI_METHOD" \] || return 1/[ -n "$CI_METHOD" ] || { CI_METHOD="ubi"; CI_UBIPART="ubi"; CI_KERNPART="kernel"; CI_ROOTPART="rootfs"; }/' "$FIT_SH"
+    if grep -q 'CI_ROOTPART="rootfs"' "$FIT_SH"; then
+      echo "  → fit.sh: patched (rootdisk missing → UBI fallback)"
+    else
+      echo "  → [WARN] fit.sh patch failed (pattern not found), manual check needed"
+    fi
+  fi
+else
+  echo "  → [WARN] fit.sh not found at $FIT_SH, skipping sysupgrade fix"
+fi
+
 # DTS/filogic.mk/02_network/platform.sh/MAC fix 已全部集成至上游源码
 # 仓库路径: yvzz/immortalwrt-mt798x-6.6 openwrt-24.10-6.6 branch
 # 无需本地 patch
