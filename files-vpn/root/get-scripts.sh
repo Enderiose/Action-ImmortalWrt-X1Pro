@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================
 # X1Pro VPN 脚本下载器
-# 无参数: 下载 fetch-scripts.sh 引导脚本 (推荐)
+# 无参数: 下载 down-scripts.sh 引导脚本 (推荐)
 # 带 *.sh 参数: 仅下载该文件到 /root/
 # 用法:  sh /root/get-scripts.sh [xxx.sh]
 # 仓库:  https://gitee.com/vvvv/wrt-x1-pro
@@ -15,7 +15,7 @@ if [ -n "$1" ] && echo "$1" | grep -q '\.sh$'; then
   FILES="$1"
   MODE="single"
 else
-  FILES="fetch-scripts.sh"
+  FILES="down-scripts.sh"
   MODE="bootstrap"
 fi
 
@@ -66,10 +66,10 @@ if [ "$fail" -eq 0 ]; then
   if [ "$MODE" = "single" ]; then
     echo " 已下载: $DEST_DIR/$FILES"
   else
-    echo " 引导脚本已下载: $DEST_DIR/fetch-scripts.sh"
+    echo " 引导脚本已下载: $DEST_DIR/down-scripts.sh"
     echo ""
     echo " 请执行以下命令获取操作脚本:"
-    echo "   sh $DEST_DIR/fetch-scripts.sh"
+    echo "   sh $DEST_DIR/down-scripts.sh"
     echo ""
   fi
 else
