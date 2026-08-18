@@ -7,15 +7,15 @@
 [ "$INTERFACE" = "loopback" ] && exit 0
 
 # 检测脚本候选列表(按优先级):
-#   仓库已将脚本重命名为 check-vpn.sh / check-l2tp.sh, 旧版固件可能仍带 vpn-check.sh, 一并兼容
+#   主脚本 check-vpn.sh, 旧版固件可能仍带 vpn-check.sh, 一并兼容 (check-l2tp.sh 已废弃删除)
 CHECK_SCRIPT=""
-for cand in /root/check-vpn.sh /root/check-l2tp.sh /root/vpn-check.sh; do
+for cand in /root/check-vpn.sh /root/vpn-check.sh; do
   [ -f "$cand" ] && { CHECK_SCRIPT="$cand"; break; }
 done
 
 # 前置条件: 检测脚本必须存在, 且网络配置中必须定义了 L2TP 接口
 [ -n "$CHECK_SCRIPT" ] || {
-  logger -t vpn-auto-fix "未找到检测脚本(check-vpn.sh/check-l2tp.sh/vpn-check.sh), 跳过自动修复"
+  logger -t vpn-auto-fix "未找到检测脚本(check-vpn.sh/vpn-check.sh), 跳过自动修复"
   exit 0
 }
 uci show network 2>/dev/null | grep -q "proto='l2tp'" || exit 0
