@@ -104,10 +104,14 @@ fix_default_route() {
 }
 
 mask_from_prefix() {
-    local p=$1 full=$(( 0xFFFFFFFF << (32 - p) ))
-    full=$(( full & 0xFFFFFFFF ))
-    printf "%d.%d.%d.%d" $(( (full >> 24) & 255 )) $(( (full >> 16) & 255 )) \
-                         $(( (full >> 8) & 255 )) $(( full & 255 ))
+    # 逐字节构造 32 位掩码, 避免 busybox ash 下 0xFFFFFFFF<<N 溢出算成 0.0.0.0
+    local p=$1 byte i result=""
+    for i in 0 1 2 3; do
+        if [ "$p" -ge 8 ]; then byte=255; p=$((p - 8))
+        else byte=0; [ "$p" -gt 0 ] && byte=$(( 256 - (1 << (8 - p)) )); p=0; fi
+        result="$result$byte"; [ "$i" -lt 3 ] && result="$result."
+    done
+    echo "$result"
 }
 
 fix_subnet_route() {

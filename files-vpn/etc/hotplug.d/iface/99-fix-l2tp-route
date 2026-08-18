@@ -20,6 +20,11 @@ done
 }
 uci show network 2>/dev/null | grep -q "proto='l2tp'" || exit 0
 
+# 前置护栏: 仅当存在默认路由(WAN 已通)才执行检测修复.
+# 避免在开机早期 WAN 尚未就绪时就贸然重启 IPsec / L2TP,
+# 否则会打断隧道建立, 表现为"升级后拿不到 IP / 远端不通", 需手动重启才恢复.
+ip route show default >/dev/null 2>&1 || exit 0
+
 # 锁文件: 防止短时间内多次接口变化导致检测脚本并发执行
 LOCK="/var/lock/vpn-auto-fix.lock"
 if [ -e "$LOCK" ]; then
