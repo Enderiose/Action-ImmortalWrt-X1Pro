@@ -1,13 +1,13 @@
 #!/bin/sh
 # ============================================================
 # X1Pro L2TP/IPsec 状态检测 + 自动修复脚本
-# 用法:  sh /tmp/vpn-check.sh [接口名] [远端目标IP] [远端网段]
+# 用法:  sh /tmp/check-vpn.sh [接口名] [远端目标IP] [远端网段]
 #       不传接口名则自动检测第一个 L2TP 接口
-#       conf 优先级: /tmp/l2tp-fixup.conf 中的 DST_TARGET/DST_SUBNET
-# 示例:  sh vpn-check.sh                     # 自动检测+修复, 检测不到会交互询问
+#       conf 优先级: /tmp/l2tp-setup.conf 中的 DST_TARGET/DST_SUBNET
+# 示例:  sh check-vpn.sh                     # 自动检测+修复, 检测不到会交互询问
 # ============================================================
 
-CONF="/tmp/l2tp-fixup.conf"
+CONF="/tmp/l2tp-setup.conf"
 [ -f "$CONF" ] && . "$CONF"
 
 # --- 自动检测 L2TP 接口 ---
@@ -43,6 +43,12 @@ fi
 [ -z "$DST_SUBNET" ] && { echo "[skip] DST_SUBNET 未配置"; exit 0; }
 
 NET_DEV="l2tp-$IFNAME"
+
+# 检测是否启用 IPsec (psks 非空则启用; 兜底: ipsec 二进制+配置存在也视为启用)
+PSKS=$(uci -q get network.$IFNAME.psks 2>/dev/null)
+USE_IPSEC=0
+[ -n "$PSKS" ] && USE_IPSEC=1
+[ $USE_IPSEC -eq 0 ] && [ -x /usr/sbin/ipsec ] && [ -f /etc/ipsec.conf ] && USE_IPSEC=1
 
 # 检测 WAN (多级回退)
 detect_wan() {
@@ -162,6 +168,7 @@ fix_l2tp_up() {
 fix_ping_target() {
     echo "  → 修复: ping $DST_TARGET ..."
     ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV" || fix_subnet_route >/dev/null 2>&1
+    [ $USE_IPSEC -eq 1 ] && { ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec; }
     ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up
     if ping -c 3 -W 2 "$DST_TARGET" >/dev/null 2>&1; then
         FIXED=$((FIXED+1)); echo "  [fixed] ping $DST_TARGET 通"; return 0
@@ -172,7 +179,7 @@ fix_ping_target() {
 
 fix_curl_target() {
     echo "  → 修复: curl $DST_TARGET ..."
-    ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec
+    [ $USE_IPSEC -eq 1 ] && { ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec; }
     ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up
     ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV" || fix_subnet_route >/dev/null 2>&1
     CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$DST_TARGET/" 2>/dev/null)
@@ -217,20 +224,28 @@ if ! ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV"; then
 fi
 
 # [3] IPsec ESTABLISHED
+if [ $USE_IPSEC -eq 1 ]; then
 echo "[3] IPsec 隧道"
 ipsec status 2>/dev/null | grep -q ESTABLISHED
 check $? "IPsec: $(ipsec status 2>/dev/null | grep ESTABLISHED | head -1 | sed 's/^[[:space:]]*//')"
 if ! ipsec status 2>/dev/null | grep -q ESTABLISHED; then
     if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] IPsec 修复失败"; fi
 fi
+else
+    echo "[3] IPsec: 未启用 (纯 L2TP 模式), 跳过"
+fi
 
 # [4] ESP 加密
+if [ $USE_IPSEC -eq 1 ]; then
 echo "[4] ESP 加密"
 ESP=$(ip xfrm state 2>/dev/null | grep -c "proto esp")
 [ "$ESP" -ge 1 ]
 check $? "ESP SA 数: $ESP"
 if [ "$ESP" -lt 1 ]; then
     if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] ESP 修复失败"; fi
+fi
+else
+    echo "[4] ESP: 未启用 (纯 L2TP 模式), 跳过"
 fi
 
 # [5] L2TP UP
