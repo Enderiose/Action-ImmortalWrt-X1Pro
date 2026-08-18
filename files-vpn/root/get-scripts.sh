@@ -46,8 +46,7 @@ fetch_one(){
 }
 
 echo "=============================================="
-echo " X1Pro VPN 脚本下载"
-echo " 仓库: gitee.com/vvvv/wrt-x1-pro"
+echo " X1Pro 引导脚本下载"
 echo "=============================================="
 
 # 网络连通性预检
@@ -69,7 +68,7 @@ if [ "$fail" -eq 0 ]; then
     echo " 引导脚本已下载: $DEST_DIR/down-scripts.sh"
     echo ""
     echo " 请执行以下命令获取操作脚本:"
-    echo "   sh $DEST_DIR/down-scripts.sh"
+    echo "   sh $DEST_DIR/down-scripts.sh 或 sh down-scripts.sh"
     echo ""
   fi
 else
