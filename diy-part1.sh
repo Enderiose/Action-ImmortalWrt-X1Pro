@@ -40,21 +40,29 @@ if [ -f "$BANDIX_MK" ]; then
 fi
 
 # 2. Fix sysupgrade failure on oray,x1pro-v1-ubootmod
-#    U-Boot 2025.07 未在设备树 chosen 节点设置 rootdisk 属性,
-#    导致 export_fitblk_bootdev() 检测失败 → fit_do_upgrade return 1 → 固件未写入.
-#    补丁: rootdisk 缺失时 fallback 到 UBI 默认参数 (ubi/kernel/rootfs).
-#    注意: fit.sh 路径因 OpenWrt 版本/分支而异, 用候选路径 + 全盘兜底搜索.
+#    U-Boot 未在设备树 chosen 节点设置 rootdisk 属性,
+#    导致 export_fitblk_bootdev() 检测失败 → CI_METHOD 为空 → fit_do_upgrade return 1 → 固件未写入.
+#    补丁: CI_METHOD 为空时 fallback 到 UBI 默认参数 (ubi/kernel/rootfs).
+#    关键: 源码树里存在【多个】fit.sh:
+#      - 通用 OpenWrt fit.sh (package/feeds base-files, 不含 export_fitblk_bootdev, 补丁对其无效)
+#      - mt798x 专用 fit.sh (含 export_fitblk_bootdev + CI_METHOD, 才是本机真正的升级逻辑)
+#    必须定位到【含 export_fitblk_bootdev】的那个并打补丁, 否则会命中通用版而静默跳过.
 FIT_SH=""
 for cand in \
-  "$OPENWRT/package/base-files/files/lib/upgrade/fit.sh" \
   "$OPENWRT/target/linux/mediatek/base-files/lib/upgrade/fit.sh" \
+  "$OPENWRT/target/linux/mediatek/filogic/base-files/lib/upgrade/fit.sh" \
+  "$OPENWRT/target/linux/mediatek/mt798x/base-files/lib/upgrade/fit.sh" \
+  "$OPENWRT/package/base-files/files/lib/upgrade/fit.sh" \
   "$OPENWRT/feeds/base-files/files/lib/upgrade/fit.sh" ; do
-  [ -f "$cand" ] && { FIT_SH="$cand"; break; }
+  if [ -f "$cand" ] && grep -q "export_fitblk_bootdev" "$cand"; then
+    FIT_SH="$cand"; break
+  fi
 done
-# 兜底: 全盘搜索 (排除 build_dir / staging_dir 产物)
+# 兜底: 全盘搜索含 export_fitblk_bootdev 的 fit.sh (排除 build_dir / staging_dir 产物)
 if [ -z "$FIT_SH" ]; then
-  FIT_SH=$(find "$OPENWRT" -path "*/lib/upgrade/fit.sh" \
-    -not -path "*/build_dir/*" -not -path "*/staging_dir/*" 2>/dev/null | head -1)
+  FIT_SH=$(find "$OPENWRT" -name fit.sh \
+    -not -path "*/build_dir/*" -not -path "*/staging_dir/*" 2>/dev/null \
+    -exec grep -l "export_fitblk_bootdev" {} \; | head -1)
 fi
 
 if [ -n "$FIT_SH" ]; then
@@ -65,11 +73,11 @@ if [ -n "$FIT_SH" ]; then
     if grep -q 'CI_ROOTPART="rootfs"' "$FIT_SH"; then
       echo "  → fit.sh: patched ($FIT_SH)"
     else
-      echo "  → [WARN] fit.sh patch failed (pattern not found)"
+      echo "  → [WARN] fit.sh patch failed (pattern not found in $FIT_SH)"
     fi
   fi
 else
-  echo "  → [WARN] fit.sh not found, skipping sysupgrade fix"
+  echo "  → [WARN] fit.sh not found (含 export_fitblk_bootdev), skipping sysupgrade fix"
 fi
 
 # DTS/filogic.mk/02_network/platform.sh/MAC fix 已全部集成至上游源码
