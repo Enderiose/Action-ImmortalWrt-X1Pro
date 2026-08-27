@@ -14,7 +14,7 @@ on:
         description: 选择代理软件
         required: false
         type: choice
-        default: 'homeproxy'
+        default: 'none'
         options:
           - 'none'
           - 'openclash'
@@ -48,7 +48,7 @@ env:
   SOURCE_COMMIT: a3378d1a2c15beb2faf4b0bce9c00f07143efa29
   FEEDS_CONF: feeds.conf.default
   DEVICE_SETUP: diy-part1.sh
-  PROXY: ${{ inputs.proxy || 'homeproxy' }}
+  PROXY: ${{ inputs.proxy || 'none' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 2G
   BUILD_NOTES: ${{ inputs.notes || github.event.client_payload.notes || '' }}
