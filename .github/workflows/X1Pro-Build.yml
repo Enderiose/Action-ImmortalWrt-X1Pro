@@ -1,162 +1,165 @@
-name: Build ImmortalWrt X1Pro
+name: Build ImmortalWrt X1 Pro v25.12
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 on:
   schedule:
-    - cron: 0 20 */3 * *   # UTC 00:00 = 北京 04:00，每3天一次
+    - cron: '0 20 */3 * *'
   repository_dispatch:
-    types: [ "X1Pro Update" ]
+    types: [X1Pro Update]
   workflow_dispatch:
     inputs:
-      proxy:
-        description: '选择代理软件'
-        required: false
-        type: choice
-        default: 'none'
-        options:
-          - 'none'
-          - 'openclash'
-          - 'passwall'
-          - 'homeproxy'
-          - 'vpn'
       notes:
-        description: '编译备注（发布到 Release 页面）'
-        required: false
-        type: string
-        default: ''
-      repo:
-        description: '指定源码仓库地址'
-        required: true
-        type: string
-        default: 'https://github.com/yvzz/immortalwrt-mt798x-6.6'
-      commit:
-        description: '指定源码commit，留空拉取最新'
+        description: 编译备注（发布到 Release 页面）
         required: false
         type: string
         default: ''
       ssh:
-        description: 'SSH 调试 (make menuconfig)'
+        description: SSH 调试（仅支持分支，仅运行 make menuconfig，不构建）
         required: false
         type: boolean
         default: false
       verbose:
-        description: '详细编译日志 V=s'
+        description: 详细编译日志（V=s）
         required: false
         type: boolean
         default: false
       release:
-        description: '发布到 Release'
+        description: 发布到 Release
         required: false
         type: boolean
         default: true
 
 env:
+  SOURCE_REPO: https://github.com/immortalwrt/immortalwrt
+  SOURCE_REF: v25.12.1
+  SOURCE_COMMIT: a3378d1a2c15beb2faf4b0bce9c00f07143efa29
+  FEEDS_CONF: feeds.conf.default
+  BUILD_CONFIG: config/x1pro-homeproxy.config
+  DEVICE_SETUP: diy-part1.sh
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 2G
-  REPO_URL: ${{ github.event.inputs.repo || github.event.client_payload.repo || 'https://github.com/yvzz/immortalwrt-mt798x-6.6' }}
-  REPO_BRANCH: openwrt-24.10-6.6
-  REPO_COMMIT: ${{ github.event.inputs.commit }}
-  FEEDS_CONF: feeds.conf.default
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  UPLOAD_RELEASE: ${{ github.event.inputs.release || github.event.client_payload.release || 'true' }}
-  PROXY: ${{ github.event.inputs.proxy || 'none' }}
-  BUILD_NOTES: ${{ github.event.inputs.notes || github.event.client_payload.notes || '' }}
+  BUILD_NOTES: ${{ inputs.notes || github.event.client_payload.notes || '' }}
   TZ: Asia/Shanghai
 
 jobs:
-  # ── SSH 调试（仅手动触发 + ssh=true 时） ──────────
   menuconfig:
     name: Menuconfig
-    if: github.event.inputs.ssh == 'true'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ssh }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
+      - name: Validate menuconfig ref
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != 'branch' ]; then
+            echo "ERROR: menuconfig can only save changes from a branch ref; selected ref type: $REF_TYPE" >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - name: Init Environment
+      - name: Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libncurses-dev build-essential git wget python3 bzip2 python3-pip
+            build-essential bzip2 file gawk gettext git libncurses-dev patch \
+            perl python3 python3-ply rsync unzip wget
           sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
+          sudo chown "$USER:$(id -gn)" /workdir
 
-      - name: Clone source
+      - name: Prepare source
         working-directory: /workdir
         run: |
-          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          git clone "$SOURCE_REPO" --branch "$SOURCE_REF" --single-branch --filter=blob:none openwrt
+          test "$(git -C openwrt rev-parse HEAD)" = "$SOURCE_COMMIT"
+          ln -sfn /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
+          cp "$GITHUB_WORKSPACE/$FEEDS_CONF" openwrt/feeds.conf.default
           cd openwrt
-          cp $GITHUB_WORKSPACE/$FEEDS_CONF .
-
-      - name: Cache OpenWrt feeds
-        uses: actions/cache@v6
-        with:
-          path: /workdir/openwrt/feeds
-          key: ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default') }}
-          restore-keys: |
-            ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-
-
-      - name: Update & Install feeds
-        timeout-minutes: 10
-        working-directory: /workdir/openwrt
-        run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-
-      - name: Load config & apply diy scripts
-        run: |
-          cd openwrt
-          cp -f $GITHUB_WORKSPACE/config/x1pro.config .config
-          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
-          $GITHUB_WORKSPACE/$DIY_P1_SH
-          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
-          $GITHUB_WORKSPACE/$DIY_P2_SH
+          bash "$GITHUB_WORKSPACE/$DEVICE_SETUP"
+          cp "$GITHUB_WORKSPACE/$BUILD_CONFIG" .config
+          make defconfig
 
       - name: SSH to menuconfig
-        uses: mxschmitt/action-tmate@v3
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3
+        with:
+          limit-access-to-actor: true
         timeout-minutes: 30
 
-      - name: Push config
+      - name: Export diffconfig
         run: |
-          cp -f /workdir/openwrt/.config "$GITHUB_WORKSPACE/config/x1pro.config"
-          cd "$GITHUB_WORKSPACE"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add config/x1pro.config
-          git diff --cached --quiet || (
-            git commit -m "Update config: x1pro" || true
-            git pull --rebase origin $(git rev-parse --abbrev-ref HEAD)
-            git push -f origin HEAD:$(git rev-parse --abbrev-ref HEAD)
-          )
+          /workdir/openwrt/scripts/diffconfig.sh > "$RUNNER_TEMP/x1pro-homeproxy.config"
 
-  # ── 编译（单 job + for 循环，复用 toolchain） ───
-  build:
-    name: Build X1Pro
+      - name: Upload diffconfig
+        uses: actions/upload-artifact@v7
+        with:
+          name: X1Pro-Menuconfig-${{ github.run_id }}
+          path: ${{ runner.temp }}/x1pro-homeproxy.config
+
+  save-menuconfig:
+    name: Save menuconfig
+    needs: menuconfig
+    if: ${{ needs.menuconfig.result == 'success' && github.ref_type == 'branch' }}
     runs-on: ubuntu-24.04
-
+    permissions:
+      contents: write
     steps:
-      - name: Check Server Performance
-        run: |
-          echo "CPU核心: $(nproc)"
-          echo "CPU型号: $(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')"
-          echo "内存: $(free -h | grep Mem | awk '{print $2}')"
-
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set BUILD_DATE and BUILD_TIME
-        run: |
-          echo "BUILD_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
-          echo "BUILD_TIME=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_ENV
-          echo "BUILD_START_TS=$(date +%s)" >> $GITHUB_ENV
+      - name: Download diffconfig
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: X1Pro-Menuconfig-${{ github.run_id }}
+          path: menuconfig-output
 
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
+      - name: Commit diffconfig
+        run: |
+          cp menuconfig-output/x1pro-homeproxy.config "$BUILD_CONFIG"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$BUILD_CONFIG"
+          if ! git diff --cached --quiet; then
+            git commit -m "build: update X1 Pro HomeProxy config"
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
+  build:
+    name: Build X1 Pro HomeProxy
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.ssh }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      build_time: ${{ steps.metadata.outputs.build_time }}
+      build_start_ts: ${{ steps.metadata.outputs.build_start_ts }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set build metadata
+        id: metadata
+        run: |
+          BUILD_TIME=$(date +'%Y%m%d-%H%M%S')
+          BUILD_START_TS=$(date +%s)
+          echo "BUILD_TIME=$BUILD_TIME" >> "$GITHUB_ENV"
+          echo "BUILD_START_TS=$BUILD_START_TS" >> "$GITHUB_ENV"
+          echo "build_time=$BUILD_TIME" >> "$GITHUB_OUTPUT"
+          echo "build_start_ts=$BUILD_START_TS" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
         with:
           tool-cache: true
           android: true
@@ -170,251 +173,360 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential gawk unzip file wget python3 \
-            python3-pip python3-setuptools python3-yaml \
-            rsync curl git \
-            libncurses-dev libssl-dev libelf-dev \
-            zlib1g-dev time subversion gettext patch perl \
-            squashfs-tools \
-            python3-ply python3-docutils python3-pyelftools \
-            ccache
-          pip3 install pyelftools --break-system-packages 2>/dev/null || true
+            build-essential bzip2 ccache curl file gawk gettext git \
+            libelf-dev libncurses-dev libssl-dev patch perl python3 \
+            python3-docutils python3-pip python3-ply python3-pyelftools \
+            python3-setuptools python3-yaml rsync squashfs-tools \
+            subversion time unzip wget zlib1g-dev
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
+          sudo chown "$USER:$(id -gn)" /workdir
 
-      - name: Clone source code
+      - name: Clone pinned ImmortalWrt source
         working-directory: /workdir
         run: |
-          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
-          if [ -n "${REPO_COMMIT}" ]; then
-            cd openwrt && git checkout ${REPO_COMMIT}
-          fi
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          git clone "$SOURCE_REPO" --branch "$SOURCE_REF" --single-branch --filter=blob:none openwrt
+          test "$(git -C openwrt rev-parse HEAD)" = "$SOURCE_COMMIT"
+          ln -sfn /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
 
-      - name: Setup caches
+      - name: Restore caches
         uses: actions/cache@v6
         with:
           path: |
             /workdir/.ccache
             /workdir/openwrt/dl
             /workdir/openwrt/feeds
-          key: ${{ runner.os }}-openwrt-x1pro-${{ env.REPO_BRANCH }}
+          key: ${{ runner.os }}-x1pro-${{ env.SOURCE_REF }}-${{ env.SOURCE_COMMIT }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-x1pro-${{ env.REPO_BRANCH }}-
+            ${{ runner.os }}-x1pro-${{ env.SOURCE_REF }}-
 
       - name: Configure ccache
         run: |
-          ccache --set-config=max_size=$CCACHE_MAXSIZE
-          ccache --set-config=cache_dir=$CCACHE_DIR
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=cache_dir="$CCACHE_DIR"
           ccache --set-config=compression=true
           ccache -z
 
-      - name: Setup feeds & patches
+      - name: Prepare feeds and X1 Pro port
         working-directory: /workdir/openwrt
         run: |
-          cp $GITHUB_WORKSPACE/$FEEDS_CONF .
+          cp "$GITHUB_WORKSPACE/$FEEDS_CONF" feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          bash "$GITHUB_WORKSPACE/$DEVICE_SETUP"
 
-      # ── Swap + 编译环境准备 ──
-      - name: Prepare build environment
+      - name: Prepare swap
         run: |
-          cd openwrt
-          sudo fallocate -l 4G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+          sudo fallocate -l 4G /swapfile 2>/dev/null || \
+            sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          # binutils readelf.c musl fix
-          make toolchain/binutils/prepare V=s 2>/dev/null || true
-          for rf in build_dir/toolchain-*/binutils-*/binutils/readelf.c; do
-            if [ -f "$rf" ]; then
-              sed -i 's/off64_t/off_t/g; s/fseeko64/fseeko/g' "$rf"
-              echo "Patched $rf"
-            fi
-          done
-          # GCC 自身源码也引用了 off64_t（musl 1.2.x 已废弃）
-          make toolchain/gcc/initial/prepare V=s 2>/dev/null || true
-          for f in build_dir/toolchain-*/gcc-*/libcpp/files.c \
-                   build_dir/toolchain-*/gcc-*/gcc/genhooks.c \
-                   build_dir/toolchain-*/gcc-*/gcc/system.h; do
-            [ -f "$f" ] || continue
-            sed -i 's/off64_t/off_t/g; s/fseeko64/fseeko/g' "$f"
-            echo "Patched $f"
-          done
 
-      # ── 多设备循环编译 ──
-      - name: Multi-Device Compilation
+      - name: Build HomeProxy firmware
         id: compile
+        working-directory: /workdir/openwrt
         run: |
-          PROXY="${{ env.PROXY }}"
           NPROC=$(($(nproc) > 4 ? 4 : $(nproc)))
+          cp "$GITHUB_WORKSPACE/$BUILD_CONFIG" .config
 
-          # 选择配置（一个 .config 编译两个设备）
-          if [ "$PROXY" = "none" ]; then
-            CONFIG_FILE="config/x1pro.config"
-          elif [ "$PROXY" = "vpn" ]; then
-            CONFIG_FILE="config/x1pro-vpn.config"
-          else
-            CONFIG_FILE="config/x1pro-${PROXY}.config"
-          fi
-          echo "Config: $CONFIG_FILE"
-
-          mkdir -p $GITHUB_WORKSPACE/firmware_collection
-          cd /workdir/openwrt
-
-          # 加载配置
-          cp -f "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
-
-          # files/ overlay: 通用 (NPS 客户端 GUI 等, 所有固件都编入)
           if [ -d "$GITHUB_WORKSPACE/files" ]; then
-            cp -rf "$GITHUB_WORKSPACE/files" /workdir/openwrt/
-            echo "[ok] files/ overlay 已加载 ($(find $GITHUB_WORKSPACE/files -type f | wc -l) 文件)"
+            mkdir -p files
+            cp -a "$GITHUB_WORKSPACE/files/." files/
           fi
-          # files-vpn/ overlay: VPN 专属 (hotplug/vpn-check, 仅 vpn 固件编入)
-          if [ "$PROXY" = "vpn" ] && [ -d "$GITHUB_WORKSPACE/files-vpn" ]; then
-            cp -rf "$GITHUB_WORKSPACE/files-vpn"/* /workdir/openwrt/files/
-            echo "[ok] files-vpn/ overlay 已合并 ($(find $GITHUB_WORKSPACE/files-vpn -type f | wc -l) 文件)"
-          fi
-
-          # 编译时间标记 (固件内 /root/BuildInfo.txt, 精确到分)
-          mkdir -p /workdir/openwrt/files/root
-          {
-            echo "BUILD_TIME=${BUILD_TIME}"
-            echo "BUILD_DATE=${BUILD_DATE}"
-            echo "PROXY=${PROXY}"
-            date '+%Y-%m-%d %H:%M %Z'
-          } > /workdir/openwrt/files/root/BuildInfo.txt
-          echo "[ok] 编译时间标记已写入 /root/BuildInfo.txt: $(date '+%Y-%m-%d %H:%M')"
-
-          # 执行 diy 脚本
-          chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
-          "$GITHUB_WORKSPACE/$DIY_P1_SH"
-          chmod +x "$GITHUB_WORKSPACE/$DIY_P2_SH"
-          "$GITHUB_WORKSPACE/$DIY_P2_SH"
 
           make defconfig
-
-          # overlay 文件通过 post-build 注入方式合并到固件（不改 stamp，保持增量编译速度）
-          echo "[ok] files/ overlay 保持原样"
-
-          make download -j$NPROC
-
-          # 编译（一次 make 输出两个设备固件）
-          if [ "${{ inputs.verbose }}" = "true" ]; then
-            make -j1 V=s CC="ccache gcc" CXX="ccache g++" || exit 1
-          else
-            if ! make -j$NPROC CC="ccache gcc" CXX="ccache g++"; then
-              echo "Multi-threaded failed, retrying single-threaded..."
-              make -j1 V=s || exit 1
+          required_configs=(
+            'CONFIG_TARGET_mediatek_filogic_DEVICE_oraybox_x1-pro-ubootmod=y'
+            'CONFIG_PACKAGE_ca-bundle=y'
+            'CONFIG_PACKAGE_dnsmasq-full=y'
+            'CONFIG_PACKAGE_dnsmasq_full_nftset=y'
+            'CONFIG_PACKAGE_firewall4=y'
+            'CONFIG_PACKAGE_ip-full=y'
+            'CONFIG_PACKAGE_jsonfilter=y'
+            'CONFIG_PACKAGE_kmod-inet-diag=y'
+            'CONFIG_PACKAGE_kmod-netlink-diag=y'
+            'CONFIG_PACKAGE_kmod-nf-tproxy=y'
+            'CONFIG_PACKAGE_kmod-nft-tproxy=y'
+            'CONFIG_PACKAGE_kmod-tun=y'
+            'CONFIG_PACKAGE_luci-app-homeproxy=y'
+            'CONFIG_PACKAGE_luci-i18n-base-zh-cn=y'
+            'CONFIG_PACKAGE_luci-i18n-homeproxy-zh-cn=y'
+            'CONFIG_PACKAGE_luci-ssl-openssl=y'
+            'CONFIG_PACKAGE_nftables-json=y'
+            'CONFIG_PACKAGE_openssl-util=y'
+            'CONFIG_PACKAGE_sing-box=y'
+            'CONFIG_PACKAGE_uclient-fetch=y'
+            'CONFIG_PACKAGE_ucode-mod-digest=y'
+            'CONFIG_PACKAGE_ucode-mod-fs=y'
+            'CONFIG_PACKAGE_ucode-mod-ubus=y'
+            'CONFIG_PACKAGE_ucode-mod-uci=y'
+          )
+          for required_config in "${required_configs[@]}"; do
+            if ! grep -Fqx "$required_config" .config; then
+              echo "ERROR: required build option is missing after make defconfig: $required_config" >&2
+              exit 1
             fi
+          done
+
+          make download -j"$NPROC"
+
+          if [ "${{ inputs.verbose }}" = "true" ]; then
+            make -j1 V=s
+          elif ! make -j"$NPROC"; then
+            echo "Parallel build failed; retrying with one job"
+            make -j1 V=s
           fi
 
-          # 收集固件（仅 ubootmod，X1Pro 用 uboot 刷机）
-          SYSUPGRADE=$(find bin/targets -name '*oray_x1pro-v1-ubootmod*sysupgrade.bin' 2>/dev/null | head -1)
-          if [ -z "$SYSUPGRADE" ]; then
-            echo "ERROR: No firmware found!"
-            find bin/targets -name "*.bin" 2>/dev/null | head -10
+          mapfile -t SYSUPGRADES < <(find bin/targets -type f \
+            -name '*oraybox_x1-pro-ubootmod*sysupgrade.bin' -print)
+          if [ "${#SYSUPGRADES[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one X1 Pro sysupgrade.bin, found ${#SYSUPGRADES[@]}" >&2
+            find bin/targets -type f -name '*sysupgrade*' -print
             exit 1
           fi
-          echo "Built: $SYSUPGRADE ($(du -h "$SYSUPGRADE" | cut -f1))"
-          # 文件名带日期时间：ImmortalWrt-X1Pro-none-20260814-0752-sysupgrade.bin
-          FW_NAME="ImmortalWrt-X1Pro-${PROXY}-${BUILD_TIME}-sysupgrade.bin"
-          cp "$SYSUPGRADE" "$GITHUB_WORKSPACE/firmware_collection/${FW_NAME}"
+          SYSUPGRADE="${SYSUPGRADES[0]}"
 
-          echo "Compilation successful"
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "fw_name=${FW_NAME}" >> $GITHUB_OUTPUT
+          EXPECTED_BOARD='oray_x1pro-v1-ubootmod'
+          EXPECTED_DIR="sysupgrade-$EXPECTED_BOARD"
+          TAR_CONTENTS="$RUNNER_TEMP/x1pro-sysupgrade-contents.txt"
+          tar -tf "$SYSUPGRADE" > "$TAR_CONTENTS"
+          for member in CONTROL kernel root; do
+            member_count=$(grep -Fxc "$EXPECTED_DIR/$member" "$TAR_CONTENTS" || true)
+            if [ "$member_count" -ne 1 ]; then
+              echo "ERROR: expected exactly one $EXPECTED_DIR/$member, found $member_count" >&2
+              cat "$TAR_CONTENTS"
+              exit 1
+            fi
+          done
+          if [ "$(tar -xOf "$SYSUPGRADE" "$EXPECTED_DIR/CONTROL")" != "BOARD=$EXPECTED_BOARD" ]; then
+            echo "ERROR: sysupgrade CONTROL contains an unexpected board name" >&2
+            exit 1
+          fi
 
-          # 列出产物
-          echo "=== Collected Firmware ==="
-          ls -lh $GITHUB_WORKSPACE/firmware_collection/
+          KERNEL_IMAGE="$RUNNER_TEMP/x1pro-kernel.itb"
+          ROOTFS_IMAGE="$RUNNER_TEMP/x1pro-root.squashfs"
+          tar -xOf "$SYSUPGRADE" "$EXPECTED_DIR/kernel" > "$KERNEL_IMAGE"
+          tar -xOf "$SYSUPGRADE" "$EXPECTED_DIR/root" > "$ROOTFS_IMAGE"
+          for image in "$KERNEL_IMAGE" "$ROOTFS_IMAGE"; do
+            if [ ! -s "$image" ]; then
+              echo "ERROR: sysupgrade contains an empty image: $image" >&2
+              exit 1
+            fi
+          done
 
-      - name: List artifacts
-        run: |
-          echo "=== Built Firmware ==="
-          find openwrt/bin/targets -name "*sysupgrade.bin" -exec ls -lh {} \;
+          python3 - "$KERNEL_IMAGE" "$ROOTFS_IMAGE" <<'PY'
+          import sys
 
-      - name: Cache save (always)
+          expected_magic = (
+              (sys.argv[1], bytes.fromhex("d00dfeed"), "FIT kernel"),
+              (sys.argv[2], b"hsqs", "SquashFS root"),
+          )
+          for image_path, expected, description in expected_magic:
+              with open(image_path, "rb") as image_file:
+                  actual = image_file.read(4)
+              if actual != expected:
+                  raise SystemExit(
+                      f"ERROR: {description} has invalid magic: {actual.hex()}"
+                  )
+          PY
+
+          FIT_INFO="$RUNNER_TEMP/x1pro-kernel-fit.txt"
+          SQUASHFS_INFO="$RUNNER_TEMP/x1pro-root-squashfs.txt"
+          ROOTFS_EXTRACT_DIR="$RUNNER_TEMP/x1pro-rootfs-verify"
+          if ! ./staging_dir/host/bin/mkimage -l "$KERNEL_IMAGE" > "$FIT_INFO" 2>&1; then
+            echo "ERROR: kernel is not a valid FIT image" >&2
+            cat "$FIT_INFO" >&2
+            exit 1
+          fi
+          if ! ./staging_dir/host/bin/unsquashfs4 -s "$ROOTFS_IMAGE" > "$SQUASHFS_INFO" 2>&1; then
+            echo "ERROR: root is not a valid SquashFS image" >&2
+            cat "$SQUASHFS_INFO" >&2
+            exit 1
+          fi
+          if ! ./staging_dir/host/bin/unsquashfs4 -no-progress -no-exit-code \
+               -d "$ROOTFS_EXTRACT_DIR" "$ROOTFS_IMAGE" >> "$SQUASHFS_INFO" 2>&1; then
+            echo "ERROR: root SquashFS cannot be fully extracted" >&2
+            cat "$SQUASHFS_INFO" >&2
+            exit 1
+          fi
+          echo "Validated inner images: kernel=$(wc -c < "$KERNEL_IMAGE") bytes, root=$(wc -c < "$ROOTFS_IMAGE") bytes"
+
+          METADATA_JSON="$RUNNER_TEMP/x1pro-sysupgrade-metadata.json"
+          ./staging_dir/host/bin/fwtool -i "$METADATA_JSON" "$SYSUPGRADE"
+          python3 - "$METADATA_JSON" <<'PY'
+          import json
+          import sys
+
+          metadata_path = sys.argv[1]
+          with open(metadata_path, encoding="utf-8") as metadata_file:
+              metadata = json.load(metadata_file)
+
+          expected_device = "oray,x1pro-v1-ubootmod"
+          supported_devices = metadata.get("supported_devices")
+          if not isinstance(supported_devices, list) or expected_device not in supported_devices:
+              raise SystemExit(
+                  f"ERROR: firmware metadata does not support {expected_device}: {supported_devices!r}"
+              )
+          PY
+
+          mapfile -t MANIFESTS < <(find "$(dirname "$SYSUPGRADE")" -maxdepth 1 -type f \
+            -name '*oraybox_x1-pro-ubootmod*.manifest' -print)
+          if [ "${#MANIFESTS[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one X1 Pro manifest, found ${#MANIFESTS[@]}" >&2
+            exit 1
+          fi
+          required_packages=(
+            automount
+            ca-bundle
+            dnsmasq-full
+            firewall4
+            ip-full
+            jsonfilter
+            kmod-inet-diag
+            kmod-netlink-diag
+            kmod-nf-tproxy
+            kmod-nft-tproxy
+            kmod-tun
+            kmod-usb3
+            luci-app-homeproxy
+            luci-i18n-base-zh-cn
+            luci-i18n-homeproxy-zh-cn
+            luci-ssl-openssl
+            nftables-json
+            openssl-util
+            sing-box
+            uclient-fetch
+            ucode-mod-digest
+            ucode-mod-fs
+            ucode-mod-ubus
+            ucode-mod-uci
+          )
+          for package in "${required_packages[@]}"; do
+            if ! grep -Eq "^${package}[[:space:]]" "${MANIFESTS[0]}"; then
+              echo "ERROR: required package is missing from firmware manifest: $package" >&2
+              exit 1
+            fi
+          done
+
+          mkdir -p "$GITHUB_WORKSPACE/firmware_collection"
+          FW_NAME='openwrt-mediatek-filogic-oraybox_x1-pro-ubootmod-squashfs-sysupgrade.bin'
+          cp "$SYSUPGRADE" "$GITHUB_WORKSPACE/firmware_collection/$FW_NAME"
+          echo "Built: $FW_NAME ($(du -h "$SYSUPGRADE" | cut -f1))"
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: Show ccache statistics
         if: always()
-        uses: actions/cache@v6
-        with:
-          path: |
-            /workdir/.ccache
-            /workdir/openwrt/dl
-            /workdir/openwrt/feeds
-          key: ${{ runner.os }}-openwrt-x1pro-${{ env.REPO_BRANCH }}
+        run: ccache -s
 
-      - name: Upload Binaries (Artifacts)
-        uses: actions/upload-artifact@v7
+      - name: Upload artifact
         if: steps.compile.outputs.status == 'success'
+        uses: actions/upload-artifact@v7
         with:
-          name: ImmortalWrt-X1Pro-${{ env.PROXY }}-${{ env.BUILD_TIME }}
+          name: ImmortalWrt-X1Pro-HomeProxy-${{ env.BUILD_TIME }}
           path: firmware_collection/*.bin
 
-      # ── Release ──
-      - name: Generate Release
-        id: release
-        if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
-        run: |
-          RELEASE_TAG="X1Pro-${{ env.BUILD_TIME }}"
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-          echo "Release: $RELEASE_TAG"
+  release:
+    name: Release X1 Pro HomeProxy
+    needs: build
+    if: ${{ needs.build.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.release) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      BUILD_TIME: ${{ needs.build.outputs.build_time }}
+      BUILD_START_TS: ${{ needs.build.outputs.build_start_ts }}
+    steps:
+      - name: Download firmware artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ImmortalWrt-X1Pro-HomeProxy-${{ needs.build.outputs.build_time }}
+          path: firmware_collection
 
-          # 记录编译结束具体时间（至此编译已完成）
+      - name: Generate release notes
+        id: release
+        run: |
+          RELEASE_TAG="X1Pro-${SOURCE_REF}-${BUILD_TIME}"
           BUILD_END_TS=$(date +%s)
           BUILD_END_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')
-          if [ -n "${{ env.BUILD_START_TS }}" ]; then
-            BUILD_START_TIME=$(date -d @${{ env.BUILD_START_TS }} '+%Y-%m-%d %H:%M:%S %Z')
-            BUILD_DURATION=$(( (BUILD_END_TS - ${{ env.BUILD_START_TS }}) / 60 ))
-            DURATION_LINE="**构建耗时:** 约 ${BUILD_DURATION} 分钟"
-          else
-            BUILD_START_TIME="${{ env.BUILD_TIME }}"
-          fi
-          echo "Build start: $BUILD_START_TIME"
-          echo "Build end: $BUILD_END_TIME"
-          echo "Build duration(min): ${BUILD_DURATION:-N/A}"
+          BUILD_START_TIME=$(date -d "@$BUILD_START_TS" '+%Y-%m-%d %H:%M:%S %Z')
+          BUILD_DURATION=$(( (BUILD_END_TS - BUILD_START_TS) / 60 ))
 
-          # 将发布说明写入 release.txt（softprops/action-gh-release 用 body_path 读取）
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           {
-            printf '## ImmortalWrt X1Pro Firmware\n\n'
-            printf '**设备:** Oray X1 Pro (uboot)\n'
-            printf '**代理:** %s\n' "${{ env.PROXY }}"
-            printf '**分支:** openwrt-24.10-6.6\n'
+            printf '## ImmortalWrt X1 Pro HomeProxy\n\n'
+            printf '**源码:** ImmortalWrt %s (%s)\n' "$SOURCE_REF" "$SOURCE_COMMIT"
+            printf '**设备:** Oray X1 Pro v1（U-Boot-mod 112 MiB UBI 布局）\n'
+            printf '**格式:** sysupgrade TAR (.bin)\n'
             printf '**构建开始:** %s\n' "$BUILD_START_TIME"
             printf '**构建结束:** %s\n' "$BUILD_END_TIME"
-            if [ -n "$DURATION_LINE" ]; then
-              printf '%s\n' "$DURATION_LINE"
+            printf '**构建耗时:** 约 %s 分钟\n' "$BUILD_DURATION"
+            if [ -n "$BUILD_NOTES" ]; then
+              printf '\n**备注:** %s\n' "$BUILD_NOTES"
             fi
-            if [ -n "${{ env.BUILD_NOTES }}" ]; then
-              printf '\n**备注:** %s\n' "${{ env.BUILD_NOTES }}"
-            fi
-            printf '\n## 固件\n'
-            for f in $GITHUB_WORKSPACE/firmware_collection/*.bin; do
-              [ -f "$f" ] || continue
-              echo "- $(basename "$f") ($(du -h "$f" | cut -f1))"
-            done
-            printf '\n## 📥 下载\n\n'
-            printf '从下方 Assets 下载对应 sysupgrade.bin，通过 uboot Web UI 刷入。\n\n'
-            printf '> 由 GitHub Actions 自动构建\n'
+            printf '\n> 此 Release 不包含 BL2/FIP，且不会写入 Factory 或 bdinfo。\n'
           } > release.txt
 
-          echo "=== release.txt ==="
           cat release.txt
-          echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        if: steps.release.outputs.status == 'success'
+      - name: Upload release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.release.outputs.release_tag }}
           body_path: release.txt
-          files: |
-            firmware_collection/*sysupgrade.bin
+          files: firmware_collection/*.bin
 
+  cleanup:
+    name: Delete old workflow runs
+    needs: [build, release]
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
       - name: Delete old workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
-        if: always()
-        with:
-          retain_days: 0
-          keep_minimum_runs: 10
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          KEEP_MINIMUM_RUNS=10
+          RUN_PAGES="$RUNNER_TEMP/current-workflow-run-pages.json"
+          IDS_TO_DELETE="$RUNNER_TEMP/current-workflow-runs-to-delete.txt"
+
+          WORKFLOW_ID=$(gh api "repos/$REPO/actions/runs/$CURRENT_RUN_ID" --jq '.workflow_id')
+          if ! [[ "$WORKFLOW_ID" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: current run returned an invalid workflow_id: $WORKFLOW_ID" >&2
+            exit 1
+          fi
+
+          gh api "repos/$REPO/actions/workflows/$WORKFLOW_ID/runs?per_page=100" \
+            --paginate --slurp > "$RUN_PAGES"
+          jq -r --arg CURRENT "$CURRENT_RUN_ID" --argjson KEEP "$KEEP_MINIMUM_RUNS" '
+            [.[] | .workflow_runs[]
+              | select(.status == "completed")
+              | select((.id | tostring) != $CURRENT)]
+            | sort_by(.created_at, .id)
+            | reverse
+            | .[$KEEP:][]?.id
+          ' "$RUN_PAGES" > "$IDS_TO_DELETE"
+
+          COUNT=$(wc -l < "$IDS_TO_DELETE")
+          echo "Deleting $COUNT completed run(s); keeping the latest $KEEP_MINIMUM_RUNS"
+
+          failed=0
+          while read -r id; do
+            [ -n "$id" ] || continue
+            echo "Deleting run: $id"
+            if ! gh api --method DELETE "repos/$REPO/actions/runs/$id" --silent; then
+              failed=$((failed + 1))
+              echo "  Failed: $id" >&2
+            fi
+          done < "$IDS_TO_DELETE"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "ERROR: $failed workflow run deletion(s) failed" >&2
+            exit 1
+          fi
