@@ -10,6 +10,17 @@ on:
     types: [X1Pro Update]
   workflow_dispatch:
     inputs:
+      proxy:
+        description: 选择代理软件
+        required: false
+        type: choice
+        default: 'homeproxy'
+        options:
+          - 'none'
+          - 'openclash'
+          - 'passwall'
+          - 'homeproxy'
+          - 'vpn'
       notes:
         description: 编译备注（发布到 Release 页面）
         required: false
@@ -36,8 +47,8 @@ env:
   SOURCE_REF: v25.12.1
   SOURCE_COMMIT: a3378d1a2c15beb2faf4b0bce9c00f07143efa29
   FEEDS_CONF: feeds.conf.default
-  BUILD_CONFIG: config/x1pro-homeproxy.config
   DEVICE_SETUP: diy-part1.sh
+  PROXY: ${{ inputs.proxy || 'homeproxy' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 2G
   BUILD_NOTES: ${{ inputs.notes || github.event.client_payload.notes || '' }}
@@ -85,7 +96,14 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           bash "$GITHUB_WORKSPACE/$DEVICE_SETUP"
-          cp "$GITHUB_WORKSPACE/$BUILD_CONFIG" .config
+          case "$PROXY" in
+            none)      CONFIG_FILE="config/x1pro.config" ;;
+            openclash) CONFIG_FILE="config/x1pro-openclash.config" ;;
+            passwall)  CONFIG_FILE="config/x1pro-passwall.config" ;;
+            homeproxy) CONFIG_FILE="config/x1pro-homeproxy.config" ;;
+            vpn)       CONFIG_FILE="config/x1pro-vpn.config" ;;
+          esac
+          cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
           make defconfig
 
       - name: SSH to menuconfig
@@ -96,13 +114,13 @@ jobs:
 
       - name: Export diffconfig
         run: |
-          /workdir/openwrt/scripts/diffconfig.sh > "$RUNNER_TEMP/x1pro-homeproxy.config"
+          /workdir/openwrt/scripts/diffconfig.sh > "$RUNNER_TEMP/x1pro-${PROXY}.config"
 
       - name: Upload diffconfig
         uses: actions/upload-artifact@v7
         with:
           name: X1Pro-Menuconfig-${{ github.run_id }}
-          path: ${{ runner.temp }}/x1pro-homeproxy.config
+          path: ${{ runner.temp }}/x1pro-${{ env.PROXY }}.config
 
   save-menuconfig:
     name: Save menuconfig
@@ -123,18 +141,25 @@ jobs:
 
       - name: Commit diffconfig
         run: |
-          cp menuconfig-output/x1pro-homeproxy.config "$BUILD_CONFIG"
+          case "$PROXY" in
+            none)      CONFIG_FILE="config/x1pro.config" ;;
+            openclash) CONFIG_FILE="config/x1pro-openclash.config" ;;
+            passwall)  CONFIG_FILE="config/x1pro-passwall.config" ;;
+            homeproxy) CONFIG_FILE="config/x1pro-homeproxy.config" ;;
+            vpn)       CONFIG_FILE="config/x1pro-vpn.config" ;;
+          esac
+          cp "menuconfig-output/x1pro-${PROXY}.config" "$CONFIG_FILE"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$BUILD_CONFIG"
+          git add "$CONFIG_FILE"
           if ! git diff --cached --quiet; then
-            git commit -m "build: update X1 Pro HomeProxy config"
+            git commit -m "build: update X1 Pro ${PROXY} config"
             git pull --rebase origin "$GITHUB_REF_NAME"
             git push origin "HEAD:$GITHUB_REF_NAME"
           fi
 
   build:
-    name: Build X1 Pro HomeProxy
+    name: Build X1 Pro
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.ssh }}
     runs-on: ubuntu-24.04
     permissions:
@@ -223,51 +248,36 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: Build HomeProxy firmware
+      - name: Build firmware
         id: compile
         working-directory: /workdir/openwrt
         run: |
           NPROC=$(($(nproc) > 4 ? 4 : $(nproc)))
-          cp "$GITHUB_WORKSPACE/$BUILD_CONFIG" .config
+          case "$PROXY" in
+            none)      CONFIG_FILE="config/x1pro.config" ;;
+            openclash) CONFIG_FILE="config/x1pro-openclash.config" ;;
+            passwall)  CONFIG_FILE="config/x1pro-passwall.config" ;;
+            homeproxy) CONFIG_FILE="config/x1pro-homeproxy.config" ;;
+            vpn)       CONFIG_FILE="config/x1pro-vpn.config" ;;
+          esac
+          echo "Proxy: $PROXY (config: $CONFIG_FILE)"
+          cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
 
           if [ -d "$GITHUB_WORKSPACE/files" ]; then
             mkdir -p files
             cp -a "$GITHUB_WORKSPACE/files/." files/
           fi
+          if [ "$PROXY" = "vpn" ] && [ -d "$GITHUB_WORKSPACE/files-vpn" ]; then
+            cp -a "$GITHUB_WORKSPACE/files-vpn/." files/
+          fi
 
           make defconfig
-          required_configs=(
-            'CONFIG_TARGET_mediatek_filogic_DEVICE_oraybox_x1-pro-ubootmod=y'
-            'CONFIG_PACKAGE_ca-bundle=y'
-            'CONFIG_PACKAGE_dnsmasq-full=y'
-            'CONFIG_PACKAGE_dnsmasq_full_nftset=y'
-            'CONFIG_PACKAGE_firewall4=y'
-            'CONFIG_PACKAGE_ip-full=y'
-            'CONFIG_PACKAGE_jsonfilter=y'
-            'CONFIG_PACKAGE_kmod-inet-diag=y'
-            'CONFIG_PACKAGE_kmod-netlink-diag=y'
-            'CONFIG_PACKAGE_kmod-nf-tproxy=y'
-            'CONFIG_PACKAGE_kmod-nft-tproxy=y'
-            'CONFIG_PACKAGE_kmod-tun=y'
-            'CONFIG_PACKAGE_luci-app-homeproxy=y'
-            'CONFIG_PACKAGE_luci-i18n-base-zh-cn=y'
-            'CONFIG_PACKAGE_luci-i18n-homeproxy-zh-cn=y'
-            'CONFIG_PACKAGE_luci-ssl-openssl=y'
-            'CONFIG_PACKAGE_nftables-json=y'
-            'CONFIG_PACKAGE_openssl-util=y'
-            'CONFIG_PACKAGE_sing-box=y'
-            'CONFIG_PACKAGE_uclient-fetch=y'
-            'CONFIG_PACKAGE_ucode-mod-digest=y'
-            'CONFIG_PACKAGE_ucode-mod-fs=y'
-            'CONFIG_PACKAGE_ucode-mod-ubus=y'
-            'CONFIG_PACKAGE_ucode-mod-uci=y'
-          )
-          for required_config in "${required_configs[@]}"; do
-            if ! grep -Fqx "$required_config" .config; then
-              echo "ERROR: required build option is missing after make defconfig: $required_config" >&2
-              exit 1
-            fi
-          done
+
+          required_device='CONFIG_TARGET_mediatek_filogic_DEVICE_oraybox_x1-pro-ubootmod=y'
+          if ! grep -Fqx "$required_device" .config; then
+            echo "ERROR: missing device target after defconfig: $required_device" >&2
+            exit 1
+          fi
 
           make download -j"$NPROC"
 
@@ -376,41 +386,24 @@ jobs:
             echo "ERROR: expected exactly one X1 Pro manifest, found ${#MANIFESTS[@]}" >&2
             exit 1
           fi
-          required_packages=(
-            automount
-            ca-bundle
-            dnsmasq-full
-            firewall4
-            ip-full
-            jsonfilter
-            kmod-inet-diag
-            kmod-netlink-diag
-            kmod-nf-tproxy
-            kmod-nft-tproxy
-            kmod-tun
-            kmod-usb3
-            luci-app-homeproxy
-            luci-i18n-base-zh-cn
-            luci-i18n-homeproxy-zh-cn
-            luci-ssl-openssl
-            nftables-json
-            openssl-util
-            sing-box
-            uclient-fetch
-            ucode-mod-digest
-            ucode-mod-fs
-            ucode-mod-ubus
-            ucode-mod-uci
-          )
-          for package in "${required_packages[@]}"; do
-            if ! grep -Eq "^${package}[[:space:]]" "${MANIFESTS[0]}"; then
-              echo "ERROR: required package is missing from firmware manifest: $package" >&2
+
+          case "$PROXY" in
+            openclash) main_pkg="luci-app-openclash" ;;
+            passwall)  main_pkg="luci-app-passwall2" ;;
+            homeproxy) main_pkg="luci-app-homeproxy" ;;
+            vpn)       main_pkg="kmod-ipt-ipsec" ;;
+            *)         main_pkg="" ;;
+          esac
+          if [ -n "$main_pkg" ]; then
+            if ! grep -Eq "^${main_pkg}[[:space:]]" "${MANIFESTS[0]}"; then
+              echo "ERROR: proxy package missing from firmware manifest: $main_pkg" >&2
               exit 1
             fi
-          done
+            echo "Verified proxy package in manifest: $main_pkg"
+          fi
 
           mkdir -p "$GITHUB_WORKSPACE/firmware_collection"
-          FW_NAME='openwrt-mediatek-filogic-oraybox_x1-pro-ubootmod-squashfs-sysupgrade.bin'
+          FW_NAME="ImmortalWrt-X1Pro-${PROXY}-${BUILD_TIME}-sysupgrade.bin"
           cp "$SYSUPGRADE" "$GITHUB_WORKSPACE/firmware_collection/$FW_NAME"
           echo "Built: $FW_NAME ($(du -h "$SYSUPGRADE" | cut -f1))"
           echo "status=success" >> "$GITHUB_OUTPUT"
@@ -423,11 +416,11 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: ImmortalWrt-X1Pro-HomeProxy-${{ env.BUILD_TIME }}
+          name: ImmortalWrt-X1Pro-${{ env.PROXY }}-${{ env.BUILD_TIME }}
           path: firmware_collection/*.bin
 
   release:
-    name: Release X1 Pro HomeProxy
+    name: Release X1 Pro
     needs: build
     if: ${{ needs.build.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.release) }}
     runs-on: ubuntu-24.04
@@ -440,13 +433,13 @@ jobs:
       - name: Download firmware artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ImmortalWrt-X1Pro-HomeProxy-${{ needs.build.outputs.build_time }}
+          name: ImmortalWrt-X1Pro-${{ env.PROXY }}-${{ needs.build.outputs.build_time }}
           path: firmware_collection
 
       - name: Generate release notes
         id: release
         run: |
-          RELEASE_TAG="X1Pro-${SOURCE_REF}-${BUILD_TIME}"
+          RELEASE_TAG="X1Pro-${SOURCE_REF}-${PROXY}-${BUILD_TIME}"
           BUILD_END_TS=$(date +%s)
           BUILD_END_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')
           BUILD_START_TIME=$(date -d "@$BUILD_START_TS" '+%Y-%m-%d %H:%M:%S %Z')
@@ -454,9 +447,10 @@ jobs:
 
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           {
-            printf '## ImmortalWrt X1 Pro HomeProxy\n\n'
+            printf '## ImmortalWrt X1 Pro (%s)\n\n' "$PROXY"
             printf '**源码:** ImmortalWrt %s (%s)\n' "$SOURCE_REF" "$SOURCE_COMMIT"
             printf '**设备:** Oray X1 Pro v1（U-Boot-mod 112 MiB UBI 布局）\n'
+            printf '**代理:** %s\n' "$PROXY"
             printf '**格式:** sysupgrade TAR (.bin)\n'
             printf '**构建开始:** %s\n' "$BUILD_START_TIME"
             printf '**构建结束:** %s\n' "$BUILD_END_TIME"
