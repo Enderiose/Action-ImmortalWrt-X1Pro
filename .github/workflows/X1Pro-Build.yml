@@ -263,13 +263,28 @@ jobs:
           echo "Proxy: $PROXY (config: $CONFIG_FILE)"
           cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
 
+          # files/ overlay: 通用配置（NPC/NPS 客户端 GUI、LuCI 主题、uci-defaults 等）
+          # 参考 24.10 逻辑：所有版本（none/openclash/passwall/homeproxy/vpn）均编入
           if [ -d "$GITHUB_WORKSPACE/files" ]; then
             mkdir -p files
             cp -a "$GITHUB_WORKSPACE/files/." files/
+            echo "[ok] files/ overlay 已加载 ($(find "$GITHUB_WORKSPACE/files" -type f | wc -l) 文件, 含 NPC 客户端)"
           fi
+          # files-vpn/ overlay: VPN 专属（l2tp/ipsec hotplug 与路由修复等），仅 vpn 版本叠加
           if [ "$PROXY" = "vpn" ] && [ -d "$GITHUB_WORKSPACE/files-vpn" ]; then
             cp -a "$GITHUB_WORKSPACE/files-vpn/." files/
+            echo "[ok] files-vpn/ overlay 已合并 ($(find "$GITHUB_WORKSPACE/files-vpn" -type f | wc -l) 文件)"
           fi
+
+          # 编译时间标记（固件内 /root/BuildInfo.txt，精确到分），对齐 24.10 行为
+          mkdir -p files/root
+          {
+            echo "BUILD_TIME=${BUILD_TIME}"
+            echo "BUILD_DATE=${BUILD_TIME%%-*}"
+            echo "PROXY=${PROXY}"
+            date '+%Y-%m-%d %H:%M %Z'
+          } > files/root/BuildInfo.txt
+          echo "[ok] 编译时间标记已写入 /root/BuildInfo.txt"
 
           make defconfig
 
