@@ -1,0 +1,71 @@
+name: Dispatch X1 Pro Build
+
+permissions:
+  actions: write
+  contents: read
+
+on:
+  schedule:
+    - cron: '0 20 */3 * *'
+  repository_dispatch:
+    types: [X1Pro Update]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 编译版本（分派到对应分支的工作流）
+        required: true
+        type: choice
+        default: '25.12'
+        options:
+          - '24.10'
+          - '25.12'
+      proxy:
+        description: 代理软件（24.10 / 25.12 均有效）
+        required: false
+        type: choice
+        default: 'none'
+        options:
+          - 'none'
+          - 'openclash'
+          - 'passwall'
+          - 'homeproxy'
+          - 'vpn'
+      notes:
+        description: 编译备注（透传给对应分支）
+        required: false
+        type: string
+        default: ''
+      release:
+        description: 发布到 Release
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  dispatch:
+    name: Dispatch build
+    runs-on: ubuntu-24.04
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch v24.10
+        if: github.event_name != 'workflow_dispatch' || inputs.version == '24.10'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run X1Pro-Build.yml --ref v24.10 \
+            -f proxy="${{ inputs.proxy || 'none' }}" \
+            -f notes="${{ inputs.notes || '' }}" \
+            -f release="${{ inputs.release || 'true' }}"
+          echo "dispatched v24.10 (proxy=${{ inputs.proxy || 'none' }})"
+
+      - name: Dispatch v25.12
+        if: github.event_name != 'workflow_dispatch' || inputs.version == '25.12'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run X1Pro-Build.yml --ref v25.12 \
+            -f proxy="${{ inputs.proxy || 'none' }}" \
+            -f notes="${{ inputs.notes || '' }}" \
+            -f release="${{ inputs.release || 'true' }}"
+          echo "dispatched v25.12 (proxy=${{ inputs.proxy || 'none' }})"
