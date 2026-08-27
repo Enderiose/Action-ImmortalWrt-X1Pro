@@ -24,3 +24,18 @@ else
 	echo "ERROR: X1 Pro source patch does not apply to the selected source" >&2
 	exit 1
 fi
+
+# ---- Aurora theme (clone single LuCI package into package/) ----
+# eamonxg aurora 是单个 LuCI 包（非 feed，feed 索引器不识别根目录无子包列表的仓库），
+# 需 clone 到 package/ 由 buildroot 自动扫描。若 clone 失败仅告警、不阻塞构建：
+# 缺包时 make defconfig 会静默丢弃对应 CONFIG_PACKAGE_*=y 符号，固件将不带主题但仍可编译。
+for pkg in luci-theme-aurora luci-app-aurora-config; do
+	repo="https://github.com/eamonxg/${pkg}.git"
+	target="$OPENWRT/package/${pkg}"
+	rm -rf "$target"
+	if git clone --depth 1 "$repo" "$target"; then
+		echo "[ok] cloned ${pkg} into package/"
+	else
+		echo "WARNING: failed to clone ${pkg} from ${repo}; firmware will build without this theme package" >&2
+	fi
+done
