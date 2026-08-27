@@ -439,7 +439,7 @@ jobs:
       - name: Generate release notes
         id: release
         run: |
-          RELEASE_TAG="X1Pro-${SOURCE_REF}-${PROXY}-${BUILD_TIME}"
+          RELEASE_TAG="X1Pro-${BUILD_TIME}"
           BUILD_END_TS=$(date +%s)
           BUILD_END_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')
           BUILD_START_TIME=$(date -d "@$BUILD_START_TS" '+%Y-%m-%d %H:%M:%S %Z')
