@@ -225,7 +225,23 @@ jobs:
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          # toolchain off64_t patch 生成已移至 diy-part1.sh（需 .config 先加载）
+          # binutils readelf.c musl fix
+          make toolchain/binutils/prepare V=s 2>/dev/null || true
+          for rf in build_dir/toolchain-*/binutils-*/binutils/readelf.c; do
+            if [ -f "$rf" ]; then
+              sed -i 's/off64_t/off_t/g; s/fseeko64/fseeko/g' "$rf"
+              echo "Patched $rf"
+            fi
+          done
+          # GCC 自身源码也引用了 off64_t（musl 1.2.x 已废弃）
+          make toolchain/gcc/initial/prepare V=s 2>/dev/null || true
+          for f in build_dir/toolchain-*/gcc-*/libcpp/files.c \
+                   build_dir/toolchain-*/gcc-*/gcc/genhooks.c \
+                   build_dir/toolchain-*/gcc-*/gcc/system.h; do
+            [ -f "$f" ] || continue
+            sed -i 's/off64_t/off_t/g; s/fseeko64/fseeko/g' "$f"
+            echo "Patched $f"
+          done
 
       # ── 多设备循环编译 ──
       - name: Multi-Device Compilation
