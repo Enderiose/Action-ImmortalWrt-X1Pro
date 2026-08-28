@@ -17,8 +17,6 @@ on:
         default: 'none'
         options:
           - 'none'
-          - 'openclash'
-          - 'passwall'
           - 'homeproxy'
           - 'vpn'
       notes:
@@ -98,8 +96,6 @@ jobs:
           bash "$GITHUB_WORKSPACE/$DEVICE_SETUP"
           case "$PROXY" in
             none)      CONFIG_FILE="config/x1pro.config" ;;
-            openclash) CONFIG_FILE="config/x1pro-openclash.config" ;;
-            passwall)  CONFIG_FILE="config/x1pro-passwall.config" ;;
             homeproxy) CONFIG_FILE="config/x1pro-homeproxy.config" ;;
             vpn)       CONFIG_FILE="config/x1pro-vpn.config" ;;
           esac
@@ -143,8 +139,6 @@ jobs:
         run: |
           case "$PROXY" in
             none)      CONFIG_FILE="config/x1pro.config" ;;
-            openclash) CONFIG_FILE="config/x1pro-openclash.config" ;;
-            passwall)  CONFIG_FILE="config/x1pro-passwall.config" ;;
             homeproxy) CONFIG_FILE="config/x1pro-homeproxy.config" ;;
             vpn)       CONFIG_FILE="config/x1pro-vpn.config" ;;
           esac
@@ -255,8 +249,6 @@ jobs:
           NPROC=$(($(nproc) > 4 ? 4 : $(nproc)))
           case "$PROXY" in
             none)      CONFIG_FILE="config/x1pro.config" ;;
-            openclash) CONFIG_FILE="config/x1pro-openclash.config" ;;
-            passwall)  CONFIG_FILE="config/x1pro-passwall.config" ;;
             homeproxy) CONFIG_FILE="config/x1pro-homeproxy.config" ;;
             vpn)       CONFIG_FILE="config/x1pro-vpn.config" ;;
           esac
@@ -264,7 +256,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
 
           # files/ overlay: 通用配置（NPC/NPS 客户端 GUI、LuCI 主题、uci-defaults 等）
-          # 参考 24.10 逻辑：所有版本（none/openclash/passwall/homeproxy/vpn）均编入
+          # 参考 24.10 逻辑：所有版本（none/homeproxy/vpn）均编入
           if [ -d "$GITHUB_WORKSPACE/files" ]; then
             mkdir -p files
             cp -a "$GITHUB_WORKSPACE/files/." files/
@@ -403,8 +395,6 @@ jobs:
           fi
 
           case "$PROXY" in
-            openclash) main_pkg="luci-app-openclash" ;;
-            passwall)  main_pkg="luci-app-passwall2" ;;
             homeproxy) main_pkg="luci-app-homeproxy" ;;
             vpn)       main_pkg="kmod-ipt-ipsec" ;;
             *)         main_pkg="" ;;
