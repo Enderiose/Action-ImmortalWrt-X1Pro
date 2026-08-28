@@ -84,4 +84,61 @@ fi
 # 仓库路径: yvzz/immortalwrt-mt798x-6.6 openwrt-24.10-6.6 branch
 # 无需本地 patch
 
+# ---- Toolchain off64_t fix: generate quilt patches (replaces workflow sed) ----
+# musl 1.2.x 废弃了 off64_t/fseeko64；binutils readelf.c 和 GCC 源码需要 patch
+# 生成 quilt patch 放到 toolchain patches 目录，让 make prepare 自动应用
+# 替代 workflow 里的运行时 sed，避免破坏 ccache 命中
+# 注意：此逻辑在 .config 加载后运行（make defconfig 之前），make 能识别 binutils/GCC 版本
+
+# binutils readelf.c off64_t fix
+BINUTILS_PATCH_DIR="$OPENWRT/toolchain/binutils/patches/2.42"
+if [ ! -f "$BINUTILS_PATCH_DIR/999-off64t-musl-fix.patch" ]; then
+  mkdir -p "$BINUTILS_PATCH_DIR"
+  make -C "$OPENWRT" toolchain/binutils/prepare V=s 2>/dev/null || true
+  for rf in "$OPENWRT"/build_dir/toolchain-*/binutils-2.42/binutils/readelf.c; do
+    [ -f "$rf" ] || continue
+    (
+      cd "$(dirname "$(dirname "$rf")")"
+      cp binutils/readelf.c binutils/readelf.c.orig
+      sed -i 's/off64_t/off_t/g; s/fseeko64/fseeko/g' binutils/readelf.c
+      diff -u binutils/readelf.c.orig binutils/readelf.c 2>/dev/null \
+        | sed -e 's/\.orig//' -e 's|^--- |--- a/|' -e 's|^+++ |+++ b/|' \
+        > "$BINUTILS_PATCH_DIR/999-off64t-musl-fix.patch" || true
+      rm -f binutils/readelf.c.orig
+    )
+    rm -rf "$OPENWRT"/build_dir/toolchain-*/binutils-2.42
+    rm -f "$OPENWRT"/build_dir/toolchain-*/.binutils-*
+    echo "[ok] generated binutils off64_t quilt patch"
+    break
+  done
+fi
+
+# GCC off64_t fix (libcpp/files.c, gcc/genhooks.c, gcc/system.h)
+GCC_PATCH_DIR="$OPENWRT/toolchain/gcc/patches/13.3.0"
+if [ ! -f "$GCC_PATCH_DIR/999-off64t-musl-fix.patch" ]; then
+  mkdir -p "$GCC_PATCH_DIR"
+  make -C "$OPENWRT" toolchain/gcc/initial/prepare V=s 2>/dev/null || true
+  GCC_PATCH_FILE="$GCC_PATCH_DIR/999-off64t-musl-fix.patch"
+  : > "$GCC_PATCH_FILE"
+  for gf in "$OPENWRT"/build_dir/toolchain-*/gcc-13.3.0; do
+    [ -d "$gf" ] || continue
+    (
+      cd "$gf"
+      for f in libcpp/files.c gcc/genhooks.c gcc/system.h; do
+        [ -f "$f" ] || continue
+        cp "$f" "$f.orig"
+        sed -i 's/off64_t/off_t/g; s/fseeko64/fseeko/g' "$f"
+        diff -u "$f.orig" "$f" 2>/dev/null \
+          | sed -e 's/\.orig//' -e 's|^--- |--- a/|' -e 's|^+++ |+++ b/|' \
+          >> "$GCC_PATCH_FILE" || true
+        rm -f "$f.orig"
+      done
+    )
+    rm -rf "$OPENWRT"/build_dir/toolchain-*/gcc-13.3.0
+    rm -f "$OPENWRT"/build_dir/toolchain-*/.gcc-*
+    echo "[ok] generated GCC off64_t quilt patch"
+    break
+  done
+fi
+
 echo "=== DIY Part 1 done ==="
