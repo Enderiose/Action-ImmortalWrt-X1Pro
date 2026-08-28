@@ -4,7 +4,7 @@ on:
   # push:
   #   branches: [ main, master ]
   schedule:
-    - cron: 0 0,12 * * *
+    - cron: 0 4,16 * * *
   workflow_dispatch:
     inputs:
       delete_failed:
