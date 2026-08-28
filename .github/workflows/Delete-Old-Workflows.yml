@@ -4,7 +4,7 @@ on:
   # push:
   #   branches: [ main, master ]
   schedule:
-    - cron: 10 23 */3 * *
+    - cron: 0 0,12 * * *
   workflow_dispatch:
     inputs:
       delete_failed:
@@ -35,7 +35,7 @@ on:
         description: '保留天数（0 = 除正在运行的全部删除）'
         required: true
         type: number
-        default: 7
+        default: 1
 
 
 permissions:

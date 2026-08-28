@@ -4,7 +4,7 @@ on:
   # push:
   #   branches: [ main, master ]
   schedule:
-    - cron: 0 23 */3 * *   # 每周一 03:00 UTC
+    - cron: 0 19 * * * 
   workflow_dispatch:
     inputs:
 
@@ -19,7 +19,7 @@ on:
         description: '清理旧 Release'
         required: false
         type: boolean
-        default: false
+        default: true
 
 
       # ─── Release 参数 ───
@@ -27,7 +27,7 @@ on:
         description: 'Release 保留天数（天），0=全部删除'
         required: false
         type: number
-        default: 7
+        default: 1
 
 
 
