@@ -142,22 +142,34 @@ fix_subnet_route() {
 fix_ipsec() {
     # 已建立则不处理
     ipsec status 2>/dev/null | grep -q ESTABLISHED && return 0
-    # 正在协商则不打断 (charon connecting), 等待最多 60s
+    # 正在协商: 若存在多个 charon 实例(开机启动竞争残留的孤儿进程),
+    # 协商会永远卡在 CONNECTING, 必须清理后重启; 否则等待不打断
     if ipsec status 2>/dev/null | grep -qE "connecting|CONNECTING"; then
-        echo "  → IPsec 正在协商, 等待不打断 ..."
-        local t=0
-        while [ $t -lt 60 ]; do
-            ipsec status 2>/dev/null | grep -q ESTABLISHED && { echo "  [ok] IPsec 协商完成"; return 0; }
-            sleep 5; t=$((t + 5))
-        done
+        local n
+        n=$(ps 2>/dev/null | grep -c "[c]haron")
+        if [ "${n:-0}" -gt 1 ]; then
+            echo "  → 检测到 ${n} 个 charon 实例(启动竞争残留), 清理后重启"
+        else
+            echo "  → IPsec 正在协商, 等待不打断 ..."
+            local t=0
+            while [ $t -lt 30 ]; do
+                ipsec status 2>/dev/null | grep -q ESTABLISHED && { echo "  [ok] IPsec 协商完成"; return 0; }
+                sleep 5; t=$((t + 5))
+            done
+        fi
     fi
-    echo "  → 修复: 重启 IPsec ..."
+    echo "  → 修复: 重启 IPsec (清理全部 charon) ..."
     [ -f /etc/strongswan.d/charon/kernel-libipsec.conf ] && \
         sed -i 's/^[[:space:]]*load[[:space:]]*=[[:space:]]*yes/load = no/' \
             /etc/strongswan.d/charon/kernel-libipsec.conf
     fix_default_route >/dev/null 2>&1
     ip xfrm state flush >/dev/null 2>&1
-    /etc/init.d/ipsec restart >/dev/null 2>&1
+    /etc/init.d/ipsec stop >/dev/null 2>&1
+    # 杀光所有 charon/starter (含开机启动竞争残留的孤儿实例), 清 pidfile
+    killall -9 charon starter 2>/dev/null
+    rm -f /var/run/charon.pid /var/run/starter.charon.pid
+    sleep 1
+    /etc/init.d/ipsec start >/dev/null 2>&1
     local t=0
     while [ $t -lt 60 ]; do
         ipsec status 2>/dev/null | grep -q ESTABLISHED && break
@@ -170,15 +182,15 @@ fix_ipsec() {
 }
 
 fix_l2tp_up() {
-    # netifd 正在建立(pending=true)则不打断, 避免反复 ifdown/ifup 卡死隧道
+    # netifd 正在建立(pending=true): 先等待; 若超时仍未 UP 说明 netifd 自身卡住, 强制重启
     if ifstatus "$IFNAME" 2>/dev/null | grep -q '"pending": true'; then
-        echo "  → 接口正在建立中(pending), 等待不打断 ..."
+        echo "  → 接口正在建立中(pending), 等待最多 60s ..."
         local t=0
         while [ $t -lt 60 ]; do
             ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' && { echo "  [ok] 接口已自动 UP"; return 0; }
             sleep 5; t=$((t + 5))
         done
-        return 1
+        echo "  → 接口仍卡在 pending (netifd 自身卡死), 强制 ifdown/ifup"
     fi
     echo "  → 修复: 重新拉起 L2TP (ifdown/ifup) ..."
     ifdown "$IFNAME" >/dev/null 2>&1; sleep 2
