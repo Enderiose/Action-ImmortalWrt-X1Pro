@@ -1,11 +1,25 @@
 #!/bin/sh
 # ============================================================
 # X1Pro L2TP/IPsec 状态检测 + 自动修复脚本
-# 用法:  sh /tmp/check-vpn.sh [接口名] [远端目标IP] [远端网段]
-#       不传接口名则自动检测第一个 L2TP 接口
-#       conf 优先级: /tmp/l2tp-setup.conf 中的 DST_TARGET/DST_SUBNET
-# 示例:  sh check-vpn.sh                     # 自动检测+修复, 检测不到会交互询问
+# v2-watchdog:
+#   - 修复: 接口未建立时 [2] 步 die 早退导致后续修复不执行
+#   - 顺序调整: 先拉起 L2TP 接口, 再补子网路由, 再查 IPsec
+#   - 温和化: 接口 pending / IPsec connecting 时不打断, 避免反复重启卡死隧道
+#   - 增加运行锁, 兼容 cron 看门狗与 hotplug 并发触发
+# 用法:  sh /root/check-vpn.sh [接口名] [远端目标IP] [远端网段]
 # ============================================================
+
+# --- 运行锁 (cron 看门狗与 hotplug 可能并发, 10 分钟过期) ---
+LOCK="/var/lock/vpn-check.lock"
+if [ -e "$LOCK" ]; then
+  if [ -n "$(find "$LOCK" -mmin +10 2>/dev/null)" ]; then
+    rm -f "$LOCK"
+  else
+    exit 0
+  fi
+fi
+touch "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
 
 CONF="/tmp/l2tp-setup.conf"
 [ -f "$CONF" ] && . "$CONF"
@@ -52,10 +66,8 @@ USE_IPSEC=0
 
 # 检测 WAN (多级回退)
 detect_wan() {
-    # 方法1: 从默认路由
     WAN_DEV="$(ip route show default 2>/dev/null | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
     WAN_GW="$(ip route show default 2>/dev/null | grep 'via ' | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*via \([^ ]*\).*/\1/p' | head -1)"
-    # 方法2: 从其他路由找 via + 设备
     if [ -z "$WAN_DEV" ]; then
         WAN_DEV="$(ip route 2>/dev/null | grep 'via ' | grep -v 'dev ppp\|dev l2tp' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
         [ -z "$WAN_DEV" ] && WAN_DEV="$(ip route 2>/dev/null | grep 'proto static' | grep -v 'dev ppp\|dev l2tp\|dev br-lan' | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
@@ -82,12 +94,8 @@ check() {
     fi
 }
 
-die() {
-    echo "  [FATAL] $1"; exit 1
-}
-
 # ============================================================
-# 修复函数
+# 修复函数 (全部非致命: 修复失败仅计数, 看门狗下轮重试)
 # ============================================================
 
 fix_default_route() {
@@ -116,6 +124,8 @@ mask_from_prefix() {
 
 fix_subnet_route() {
     echo "  → 修复: 添加 $DST_SUBNET dev $NET_DEV ..."
+    # 设备不存在则等接口先起来 (由 [2] fix_l2tp_up 处理), 不再 die
+    [ -d "/sys/class/net/$NET_DEV" ] || { echo "  [note] $NET_DEV 设备不存在, 先拉起接口"; return 1; }
     ip route replace "$DST_SUBNET" dev "$NET_DEV" 2>/dev/null
     if ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV"; then
         uci -q delete network.vpn_route 2>/dev/null
@@ -130,20 +140,28 @@ fix_subnet_route() {
 }
 
 fix_ipsec() {
+    # 已建立则不处理
+    ipsec status 2>/dev/null | grep -q ESTABLISHED && return 0
+    # 正在协商则不打断 (charon connecting), 等待最多 60s
+    if ipsec status 2>/dev/null | grep -qE "connecting|CONNECTING"; then
+        echo "  → IPsec 正在协商, 等待不打断 ..."
+        local t=0
+        while [ $t -lt 60 ]; do
+            ipsec status 2>/dev/null | grep -q ESTABLISHED && { echo "  [ok] IPsec 协商完成"; return 0; }
+            sleep 5; t=$((t + 5))
+        done
+    fi
     echo "  → 修复: 重启 IPsec ..."
     [ -f /etc/strongswan.d/charon/kernel-libipsec.conf ] && \
         sed -i 's/^[[:space:]]*load[[:space:]]*=[[:space:]]*yes/load = no/' \
             /etc/strongswan.d/charon/kernel-libipsec.conf
     fix_default_route >/dev/null 2>&1
     ip xfrm state flush >/dev/null 2>&1
-    /etc/init.d/ipsec stop >/dev/null 2>&1
-    killall -9 charon starter 2>/dev/null
-    sleep 1
-    ipsec start >/dev/null 2>&1
+    /etc/init.d/ipsec restart >/dev/null 2>&1
     local t=0
-    while [ $t -lt 30 ]; do
+    while [ $t -lt 60 ]; do
         ipsec status 2>/dev/null | grep -q ESTABLISHED && break
-        sleep 2; t=$((t + 2))
+        sleep 5; t=$((t + 5))
     done
     if ipsec status 2>/dev/null | grep -q ESTABLISHED; then
         FIXED=$((FIXED+1)); echo "  [fixed] IPsec ESTABLISHED"; return 0
@@ -152,18 +170,29 @@ fix_ipsec() {
 }
 
 fix_l2tp_up() {
+    # netifd 正在建立(pending=true)则不打断, 避免反复 ifdown/ifup 卡死隧道
+    if ifstatus "$IFNAME" 2>/dev/null | grep -q '"pending": true'; then
+        echo "  → 接口正在建立中(pending), 等待不打断 ..."
+        local t=0
+        while [ $t -lt 60 ]; do
+            ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' && { echo "  [ok] 接口已自动 UP"; return 0; }
+            sleep 5; t=$((t + 5))
+        done
+        return 1
+    fi
     echo "  → 修复: 重新拉起 L2TP (ifdown/ifup) ..."
     ifdown "$IFNAME" >/dev/null 2>&1; sleep 2
     ifup "$IFNAME" >/dev/null 2>&1
     local t=0
-    while [ $t -lt 30 ]; do
+    while [ $t -lt 60 ]; do
         ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' && break
-        sleep 3; t=$((t + 3))
+        sleep 5; t=$((t + 5))
     done
     if ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'; then
         IP=$(ifstatus "$IFNAME" 2>/dev/null | sed -n 's/.*"address": "\([^"]*\)".*/\1/p' | head -1)
         FIXED=$((FIXED+1)); echo "  [fixed] L2TP UP, IP: $IP"
         fix_default_route >/dev/null 2>&1
+        fix_subnet_route >/dev/null 2>&1
         return 0
     fi
     return 1
@@ -171,9 +200,9 @@ fix_l2tp_up() {
 
 fix_ping_target() {
     echo "  → 修复: ping $DST_TARGET ..."
+    ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up >/dev/null 2>&1
     ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV" || fix_subnet_route >/dev/null 2>&1
-    [ $USE_IPSEC -eq 1 ] && { ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec; }
-    ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up
+    [ $USE_IPSEC -eq 1 ] && { ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec >/dev/null 2>&1; }
     if ping -c 3 -W 2 "$DST_TARGET" >/dev/null 2>&1; then
         FIXED=$((FIXED+1)); echo "  [fixed] ping $DST_TARGET 通"; return 0
     fi
@@ -183,8 +212,8 @@ fix_ping_target() {
 
 fix_curl_target() {
     echo "  → 修复: curl $DST_TARGET ..."
-    [ $USE_IPSEC -eq 1 ] && { ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec; }
-    ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up
+    ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true' || fix_l2tp_up >/dev/null 2>&1
+    [ $USE_IPSEC -eq 1 ] && { ipsec status 2>/dev/null | grep -q ESTABLISHED || fix_ipsec >/dev/null 2>&1; }
     ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV" || fix_subnet_route >/dev/null 2>&1
     CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$DST_TARGET/" 2>/dev/null)
     [ "$CODE" = "000" ] && CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "https://$DST_TARGET/" 2>/dev/null)
@@ -204,7 +233,7 @@ fix_internet() {
 }
 
 # ============================================================
-# 检测 + 修复
+# 检测 + 修复 (顺序: 先拉起接口, 再补路由, 再查 IPsec)
 # ============================================================
 echo "=============================================="
 echo " L2TP/IPsec VPN 状态检测"
@@ -216,32 +245,41 @@ echo "[1] 默认路由"
 ip route show default 2>/dev/null | grep -v "dev $NET_DEV" | grep -q "default"
 check $? "默认路由在 WAN: $(ip route show default)"
 if ! ip route show default 2>/dev/null | grep -v "dev $NET_DEV" | grep -q "default"; then
-    if fix_default_route; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else die "默认路由修复失败"; fi
+    if fix_default_route; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] 默认路由修复失败"; fi
 fi
 
-# [2] 远端网段路由
-echo "[2] 远端网段 $DST_SUBNET 路由"
+# [2] L2TP 接口 UP (先拉起接口, 后续路由/IPsec 检查才有意义)
+echo "[2] L2TP 接口"
+IP=$(ifstatus "$IFNAME" 2>/dev/null | sed -n 's/.*"address": "\([^"]*\)".*/\1/p' | head -1)
+ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'
+check $? "L2TP UP, IP: ${IP:-无}"
+if ! ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'; then
+    if fix_l2tp_up; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] L2TP 接口修复失败, 看门狗下轮重试"; fi
+fi
+
+# [3] 远端网段路由 (接口起来后设备存在, 路由可正常添加)
+echo "[3] 远端网段 $DST_SUBNET 路由"
 ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV"
 check $? "VPN 路由: $(ip route show "$DST_SUBNET" 2>/dev/null)"
 if ! ip route show "$DST_SUBNET" 2>/dev/null | grep -q "dev $NET_DEV"; then
-    if fix_subnet_route; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else die "子网路由修复失败"; fi
+    if fix_subnet_route; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] 子网路由修复失败"; fi
 fi
 
-# [3] IPsec ESTABLISHED
+# [4] IPsec ESTABLISHED
 if [ $USE_IPSEC -eq 1 ]; then
-echo "[3] IPsec 隧道"
+echo "[4] IPsec 隧道"
 ipsec status 2>/dev/null | grep -q ESTABLISHED
 check $? "IPsec: $(ipsec status 2>/dev/null | grep ESTABLISHED | head -1 | sed 's/^[[:space:]]*//')"
 if ! ipsec status 2>/dev/null | grep -q ESTABLISHED; then
-    if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] IPsec 修复失败"; fi
+    if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] IPsec 修复失败, 看门狗下轮重试"; fi
 fi
 else
-    echo "[3] IPsec: 未启用 (纯 L2TP 模式), 跳过"
+    echo "[4] IPsec: 未启用 (纯 L2TP 模式), 跳过"
 fi
 
-# [4] ESP 加密
+# [5] ESP 加密
 if [ $USE_IPSEC -eq 1 ]; then
-echo "[4] ESP 加密"
+echo "[5] ESP 加密"
 ESP=$(ip xfrm state 2>/dev/null | grep -c "proto esp")
 [ "$ESP" -ge 1 ]
 check $? "ESP SA 数: $ESP"
@@ -249,16 +287,7 @@ if [ "$ESP" -lt 1 ]; then
     if fix_ipsec; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else echo "  [WARN] ESP 修复失败"; fi
 fi
 else
-    echo "[4] ESP: 未启用 (纯 L2TP 模式), 跳过"
-fi
-
-# [5] L2TP UP
-echo "[5] L2TP 接口"
-IP=$(ifstatus "$IFNAME" 2>/dev/null | sed -n 's/.*"address": "\([^"]*\)".*/\1/p' | head -1)
-ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'
-check $? "L2TP UP, IP: ${IP:-无}"
-if ! ifstatus "$IFNAME" 2>/dev/null | grep -q '"up": true'; then
-    if fix_l2tp_up; then FAIL=$((FAIL-1)); PASS=$((PASS+1)); else die "L2TP 接口修复失败"; fi
+    echo "[5] ESP: 未启用 (纯 L2TP 模式), 跳过"
 fi
 
 # [6] ping 远端
@@ -289,7 +318,7 @@ fi
 
 echo "=============================================="
 echo " 结果: $PASS 通过, $FAIL 失败, $FIXED 已修复"
-[ "$FAIL" -eq 0 ] && echo " 状态: 健康" || echo " 状态: 异常 (仍有 $FAIL 项失败)"
+[ "$FAIL" -eq 0 ] && echo " 状态: 健康" || echo " 状态: 异常 (仍有 $FAIL 项失败, 看门狗将继续重试)"
 echo "=============================================="
 
 exit $FAIL
