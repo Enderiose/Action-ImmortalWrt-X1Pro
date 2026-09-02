@@ -51,7 +51,7 @@ jobs:
       run: |
         set -e
 
-        RETAIN_DAYS="${{ inputs.retain_days || '7' }}"
+        RETAIN_DAYS="${{ inputs.retain_days || '1' }}"
         DELETE_FAILED="${{ inputs.delete_failed || 'YES' }}"
         DELETE_CANCELLED="${{ inputs.delete_cancelled || 'YES' }}"
         DELETE_SKIPPED="${{ inputs.delete_skipped || 'YES' }}"

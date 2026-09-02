@@ -106,7 +106,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RETENTION: ${{ inputs.release_retention_days }}
         run: |
-          RETENTION=${RETENTION:-7}
+          RETENTION=${RETENTION:-1}
           CUTOFF=$(date -d "$RETENTION days ago" +%s)
           echo "保留最近 ${RETENTION} 天的 Release"
 
