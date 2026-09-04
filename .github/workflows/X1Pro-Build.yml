@@ -5,8 +5,8 @@ permissions:
   contents: read
 
 on:
-  schedule:
-    - cron: '0 20 */3 * *'
+  # schedule:
+  #  - cron: '0 20 */3 * *'
   repository_dispatch:
     types: [X1Pro Update]
   workflow_dispatch:
